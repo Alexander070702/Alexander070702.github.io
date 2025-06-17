@@ -28,8 +28,7 @@
 
   function initFlowConservationDemo(boardsData) {
     if (!boardsData) {
-      console.error('boardsData is required!');
-      return;
+            return;
     }
     if (typeof d3 === 'undefined') {
       console.error('D3.js is required');
@@ -102,24 +101,47 @@
     // Particles: slower & smooth
     const SPAWN_INT=200;      // spawn every 200ms
     const DURATION=12000;     // 12s total travel
-    setInterval(()=>{
-      let r=Math.random(), cum=0, idx=weights.length-1;
-      for(let j=0;j<weights.length;j++){cum+=weights[j]; if(r<cum){idx=j;break;}}
-      const seg=paths[idx];
-      const circ=svg.append('circle')
-        .attr('r',4).attr('fill','#440154FF').attr('opacity',0.8)
-        .attr('cx',seg[0].x).attr('cy',seg[0].y);
+ setInterval(() => {
+      // choose an action index by flow‐weighted sampling
+      let r = Math.random(), cum = 0, idx = weights.length - 1;
+      for (let j = 0; j < weights.length; j++) {
+        cum += weights[j];
+        if (r < cum) { idx = j; break; }
+      }
+
+      // define per‐action particle colors
+      const pColor = idx === 0
+        ? '#33ff66'  // top: green
+        : idx === 1
+        ? '#ffd700'  // second: yellow
+        : '#ff6666'; // third: red
+
+      const seg = paths[idx];
+      const circ = svg.append('circle')
+        .attr('r', 5)
+        .attr('fill', pColor)
+        .attr('opacity', 1)
+        .attr('cx', seg[0].x)
+        .attr('cy', seg[0].y);
+
       circ.transition().duration(DURATION)
-        .attrTween('transform',function(){
-          return t=>{
-            let x,y;
-            if(t<0.5){const tt=t/0.5; x=seg[0].x+(seg[1].x-seg[0].x)*tt; y=seg[0].y+(seg[1].y-seg[0].y)*tt;} 
-            else{const tt=(t-0.5)/0.5; x=seg[1].x+(seg[2].x-seg[1].x)*tt; y=seg[1].y+(seg[2].y-seg[1].y)*tt;}
-            return `translate(${x-seg[0].x},${y-seg[0].y})`;
+        .attrTween('transform', function() {
+          return t => {
+            let x, y;
+            if (t < 0.5) {
+              const tt = t / 0.5;
+              x = seg[0].x + (seg[1].x - seg[0].x) * tt;
+              y = seg[0].y + (seg[1].y - seg[0].y) * tt;
+            } else {
+              const tt = (t - 0.5) / 0.5;
+              x = seg[1].x + (seg[2].x - seg[1].x) * tt;
+              y = seg[1].y + (seg[2].y - seg[1].y) * tt;
+            }
+            return `translate(${x - seg[0].x},${y - seg[0].y})`;
           };
         })
         .remove();
-    },SPAWN_INT);
+    }, SPAWN_INT);
   }
 
   window.initFlowConservationDemo=initFlowConservationDemo;

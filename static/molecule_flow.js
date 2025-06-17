@@ -1,5 +1,33 @@
 // static/molecule_flow.js
-
+// ─── FIX missing d3.max & d3.min for d3-sankey ───────────────────────────────
+if (typeof d3.max !== 'function') {
+  d3.max = function(array, accessor) {
+    if (accessor == null) {
+      return Math.max.apply(null, array);
+    } else {
+      let max = -Infinity;
+      for (let i = 0; i < array.length; i++) {
+        const v = accessor(array[i], i, array);
+        if (v > max) max = v;
+      }
+      return max;
+    }
+  };
+}
+if (typeof d3.min !== 'function') {
+  d3.min = function(array, accessor) {
+    if (accessor == null) {
+      return Math.min.apply(null, array);
+    } else {
+      let min = Infinity;
+      for (let i = 0; i < array.length; i++) {
+        const v = accessor(array[i], i, array);
+        if (v < min) min = v;
+      }
+      return min;
+    }
+  };
+}
 // configuration
 const CFG2 = {
   width:            900,

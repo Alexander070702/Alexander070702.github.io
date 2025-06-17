@@ -1,4 +1,7 @@
 "use strict";
+// state
+let autoClickUsed = false;
+
 
 /*
   -------------------------------------------------------------------------------
@@ -106,6 +109,19 @@ const TETROMINOES = {
   ]
 };
 
+// right after your constants
+const BASE = ['I','O','T','S','Z','J','L'];
+let nextIdx = 0;
+function getNextPiece() {
+  const p = BASE[nextIdx];
+  nextIdx = (nextIdx + 1) % BASE.length;
+  return p;
+}
+// create as many as you like—a repeating cycle of 1000 pieces for example:
+const PREDEFINED_PIECES = Array.from({length:1000}, () => getNextPiece());
+
+
+
 
 function makeBoardsData() {
   // 1) Root
@@ -131,7 +147,7 @@ function makeBoardsData() {
       board:   b,
       spawn:   c.spawnCells,
       landing: c.landingCells,
-      flow:    c.flow
+    flow:    c.customPct    // ← visualize the auto-percentages instead
     };
   });
 
@@ -214,7 +230,8 @@ class TetrisGame {
   constructor(cols = COLS, rows = ROWS) {
     this.cols = cols;
     this.rows = rows;
-    this.piece_id = 0;  // increments every time we spawn a new piece
+    this.spawnIndex = 0;    // ← initialize here
+    this.piece_id  = 0;
     this.reset_game();
   }
 
@@ -237,23 +254,26 @@ class TetrisGame {
 
   /**
    * spawn_piece: Randomly choose a Tetromino type, set its shape, position, etc.
-   */
-  spawn_piece() {
-    this.piece_id += 1;
-    const tTypes = Object.keys(TETROMINOES);
-    const t_type = tTypes[Math.floor(Math.random() * tTypes.length)];
-    const shape = deepCopy(TETROMINOES[t_type]);
-    const piece = {
-      type: t_type,
-      shape: shape,
-      x: Math.floor((this.cols - shape[0].length) / 2),
-      y: 0
-    };
-    if (this.collides(piece)) {
-      this.game_over = true;
+      */
+    spawn_piece() {
+      this.piece_id += 1;
+
+      // deterministic sequence instead of random:
+      const t_type = PREDEFINED_PIECES[this.spawnIndex % PREDEFINED_PIECES.length];
+      this.spawnIndex += 1;
+
+      const shape = deepCopy(TETROMINOES[t_type]);
+      const piece = {
+        type:  t_type,
+        shape: shape,
+        x:     Math.floor((this.cols - shape[0].length) / 2),
+        y:     0
+      };
+
+      if (this.collides(piece)) this.game_over = true;
+      return piece;
     }
-    return piece;
-  }
+
 
   /**
    * collides: Check if a piece is out of bounds or overlaps existing blocks.
@@ -369,19 +389,7 @@ class TetrisGame {
    * get_state_key: Return a JSON-serialized object capturing the board + piece state
    *                (including shape) so we can store it for GFlowNet learning.
    */
-  get_state_key() {
-    const piece = this.current_piece;
-    const stateObj = {
-      board: this.board,
-      piece: {
-        type: piece.type,
-        shape: piece.shape,
-        x: piece.x,
-        y: piece.y
-      }
-    };
-    return JSON.stringify(stateObj);
-  }
+
 
   /**
    * get_terminal_moves: Compute all possible "terminal placements" of the current piece.
@@ -430,7 +438,9 @@ class TetrisGame {
           continue;
         }
         const center = this.get_piece_center(testPiece);
-        const action_key = `r${rot}_x${x}`;
+        // include both the tetromino type and the rotation angle
+      const action_key = `${orig.type}_r${rot * 90}_x${x}`;
+
         candidates.push({
           action_key: action_key,
           piece: testPiece,
@@ -520,9 +530,18 @@ class TetrisGame {
   }
 }
 
-//-----------------------------------------------------------------------------
-// TRAJECTORY-BALANCE GFLOWNET AGENT (translating Python version to JS)
-//-----------------------------------------------------------------------------
+// ─── 1) Canonical key builder ─────────────────────────────────────────────
+function stableStateKey(board, next) {
+  // exactly: {"board":<board-json>,"next":"<next-piece>"}
+  return `{"board":${JSON.stringify(board)},"next":${JSON.stringify(next)}}`;
+}
+
+// ─── 2) Make runtime state_key use the same builder ───────────────────────
+TetrisGame.prototype.get_state_key = function() {
+  return stableStateKey(this.board, this.current_piece.type);
+};
+
+
 
 class TrajectoryBalanceAgent {
   constructor(lr = 0.01) {
@@ -541,15 +560,15 @@ class TrajectoryBalanceAgent {
    *                        initialize it with a random log flow.
    */
   _ensure_action_exists(state_key, action_key) {
-    if (!this.log_flows[state_key]) {
-      this.log_flows[state_key] = {};
-    }
-    if (!this.log_flows[state_key][action_key]) {
-      // randomize in [log(0.5), log(1.5)] roughly
-      const val = 0.5 + Math.random();
-      this.log_flows[state_key][action_key] = Math.log(val);
-    }
+
+      if (!this.log_flows[state_key]) {
+    this.log_flows[state_key] = {};
   }
+  if (this.log_flows[state_key][action_key] === undefined) {
+    this.log_flows[state_key][action_key] = -1e9;  // effectively zero probability
+  }
+};
+  
 
   /**
    * sample_action: Given a state_key and a list of candidate actions,
@@ -702,6 +721,11 @@ function simulateEpisode(game, agent) {
  *   Repeatedly simulate episodes in the browser to train the agent. 
  *   Just for completeness.
  */
+// ─── DROP THIS IN RIGHT AFTER YOUR class TetrisGame { … } ────────────────────
+// and *before* you ever call `new TetrisGame()`
+
+
+
 function pretrain(numEpisodes, checkpointInterval, lr) {
   const localAgent = new TrajectoryBalanceAgent(lr);
   let totalReward = 0.0;
@@ -810,98 +834,122 @@ class Arrow {
 /**
  * getCandidateMoves: Mimics the /api/terminal_moves endpoint logic.
  */
+// ————————————————————————————————————————————————————————————————
+// Option A: Filter at the data‐source level
+// getCandidateMoves now only returns actions whose action_key exists in your JSON
+// ————————————————————————————————————————————————————————————————
+// ─────────────────────────────────────────────────────────────────────────────
+// 2) getCandidateMoves: only ever returns moves that exist in agent.log_flows
+// ─────────────────────────────────────────────────────────────────────────────
 function getCandidateMoves() {
   if (game.is_over()) {
     return {
       current_piece_center: game.get_piece_center(),
-      terminal_moves: [],
+      terminal_moves:       [],
       game_state: {
-        board: game.board,
+        board:         game.board,
         current_piece: game.current_piece,
-        score: game.score,
-        game_over: game.game_over
+        score:         game.score,
+        game_over:     game.game_over
       }
     };
   }
 
-  const state_key = game.get_state_key();
-  const cands = game.get_terminal_moves();
-  const result = [];
+  const stateKey      = game.get_state_key();
+  const allCands      = game.get_terminal_moves();
+  const flowsForState = agent.log_flows[stateKey] || {};
 
-  let sum_exp = 0.0;
-  for (let c of cands) {
-    agent._ensure_action_exists(state_key, c.action_key);
-    const val = Math.exp(agent.log_flows[state_key][c.action_key]);
-    sum_exp += val;
-  }
+  // 1) Compute flow & probability for *all* candidates:
+  let sumFlow = 0;
+  allCands.forEach(c => {
+    const logF   = flowsForState[c.action_key] != null
+                   ? flowsForState[c.action_key]
+                   : -Infinity;
+    c.flow       = (logF === -Infinity) ? 0 : Math.exp(logF);
+    sumFlow     += c.flow;
+  });
+  allCands.forEach(c => {
+    c.probability = sumFlow > 0
+      ? c.flow / sumFlow
+      : 1.0 / allCands.length;
+  });
 
-  for (let c of cands) {
-    const flow_val = Math.exp(agent.log_flows[state_key][c.action_key]);
-    const prob = (sum_exp > 0) ? flow_val / sum_exp : 1.0 / cands.length;
-    c.flow = flow_val;
-    c.probability = prob;
-    result.push(c);
-  }
+  // 2) If we *do* have pretrained flows for this state, filter down,
+  //    otherwise show every candidate:
+  const hasFlowsForState = Object.keys(flowsForState).length > 0;
+  const terminal_moves = hasFlowsForState
+    ? allCands.filter(c => flowsForState[c.action_key] != null)
+    : allCands;
 
   return {
     current_piece_center: game.get_piece_center(),
-    terminal_moves: result,
+    terminal_moves,
     game_state: {
-      board: game.board,
+      board:         game.board,
       current_piece: game.current_piece,
-      score: game.score,
-      game_over: game.game_over
+      score:         game.score,
+      game_over:     game.game_over
     }
   };
 }
 
+
 /**
  * selectMove: Mimics /api/select_move. Takes an action_key if chosen,
  *             otherwise we sample from agent's distribution.
+ */
+/**
+ * selectMove: Mimics /api/select_move. If you pass an actionKey it will choose that;
+ * otherwise it picks the move with the highest flow.
  */
 function selectMove(actionKey = null) {
   if (game.is_over()) {
     return { error: "Game Over" };
   }
 
+  // get all terminal‐placement candidates for the current piece
   const cands = game.get_terminal_moves();
   if (!cands || cands.length === 0) {
     return { error: "No moves" };
   }
 
   const state_key = game.get_state_key();
-  let selected_action = null;
+  const flows     = agent.log_flows[state_key] || {};
 
-  if (actionKey) {
-    selected_action = cands.find(x => x.action_key === actionKey) || null;
+  // compute each candidate’s flow
+  cands.forEach(c => {
+    const logF = (flows[c.action_key] != null) ? flows[c.action_key] : -Infinity;
+    c.flow     = (logF === -Infinity) ? 0 : Math.exp(logF);
+  });
+
+  // if caller specified one, use that
+  let selected = actionKey
+    ? cands.find(c => c.action_key === actionKey)
+    : null;
+
+  // otherwise pick the max‐flow candidate
+  if (!selected) {
+    selected = cands.reduce((best, cur) => cur.flow > best.flow ? cur : best, cands[0]);
   }
-  if (!selected_action) {
-    const [cand, _p] = agent.sample_action(state_key, cands);
-    selected_action = cand;
-  }
 
-  // Record the chosen state-action
-  trajectory.push([state_key, selected_action.action_key]);
-
-  // Animate toward that piece
-  game.target_piece = deepCopy(selected_action.piece);
-
-  let arrow_info = {
-    from: game.get_piece_center(game.current_piece),
-    to: selected_action.piece_center,
-    flow: 0.0,
-    probability: 0.0
-  };
+  // record and animate
+  trajectory.push([state_key, selected.action_key]);
+  game.target_piece = deepCopy(selected.piece);
 
   return {
-    action_key: selected_action.action_key,
-    arrow: arrow_info,
+    action_key: selected.action_key,
+    arrow: {
+      from:        game.get_piece_center(game.current_piece),
+      to:          selected.piece_center,
+      flow:        selected.flow,
+      probability: 1.0
+    },
     game_state: {
-      board: game.board,
+      board:         game.board,
       current_piece: game.current_piece,
-      score: game.score,
-      game_over: game.game_over,
-      piece_id: game.piece_id
+      score:         game.score,
+      game_over:     game.game_over,
+      piece_id:      game.piece_id
     }
   };
 }
@@ -910,28 +958,27 @@ function selectMove(actionKey = null) {
  * tickGameLogic: Mimics /api/tick. 
  *   We do the step, check for new piece or game over, do TB update on game over, etc.
  */
+// ─── 1) Modified tickGameLogic ─────────────────────────────────────────────
 function tickGameLogic() {
   const old_game_over = game.is_over();
-  const old_piece_id = game.piece_id;
+  const old_piece_id  = game.piece_id;
 
   game.tick();
 
   const new_game_over = game.is_over();
-  const new_piece_id = game.piece_id;
+  const new_piece_id  = game.piece_id;
 
-  // If game ended just now, do TB update and reset
+  // If game just ended, restart without any TB update
   if (new_game_over && !old_game_over) {
-    const final_reward = game.get_final_reward();
-    agent.update_trajectory(trajectory, final_reward);
-    trajectory = [];
     game.reset_game();
+    trajectory = [];
   }
 
-  // If a new piece was spawned, recalc new terminal moves
+  // If a new piece was spawned, recalc terminal moves
   let terminal_moves = [];
   if (new_piece_id !== old_piece_id && !game.is_over()) {
     const state_key = game.get_state_key();
-    const cands = game.get_terminal_moves();
+    const cands     = game.get_terminal_moves();
 
     let sum_exp = 0.0;
     for (let c of cands) {
@@ -941,32 +988,33 @@ function tickGameLogic() {
     }
     for (let c of cands) {
       const flow_val = Math.exp(agent.log_flows[state_key][c.action_key]);
-      const prob = sum_exp > 0 ? flow_val / sum_exp : 1.0 / cands.length;
-      c.flow = flow_val;
+      const prob     = sum_exp > 0 ? flow_val / sum_exp : 1.0 / cands.length;
+      c.flow        = flow_val;
       c.probability = prob;
       terminal_moves.push(c);
     }
   }
 
   return {
-    game_state: {
-      board: game.board,
-      current_piece: game.current_piece,
-      score: game.score,
-      game_over: game.game_over,
-      piece_id: game.piece_id
-    },
-    current_piece_center: game.get_piece_center(),
-    terminal_moves: terminal_moves
+    game_state:            { board: game.board, current_piece: game.current_piece, score: game.score, game_over: game.game_over, piece_id: game.piece_id },
+    current_piece_center:  game.get_piece_center(),
+    terminal_moves:        terminal_moves
   };
 }
 
-/**
- * resetGameLogic: Mimics /api/reset
- */
+
 function resetGameLogic() {
+  // 1) force the next tetromino to be PREDEFINED_PIECES[0] == "I"
+  game.spawnIndex = 0;
+  // also reset the internal piece_id counter if you like:
+  game.piece_id   = 0;
+
+  // 2) now actually wipe the board and spawn
   game.reset_game();
+
+  // 3) clear any learning‐trajectory
   trajectory = [];
+
   return { status: "reset" };
 }
 
@@ -1124,83 +1172,120 @@ function animate() {
   requestAnimationFrame(animate);
 }
 
-//-----------------------------------------------------------------------------
-// GAME FLOW & EVENT HANDLERS
-//-----------------------------------------------------------------------------
+let jsonSequences = [];   // will hold your arrays of action‐keys
+let jsonIdx       = 0;    // which sequence we’re on
+// ─────────────────────────────────────────────────────────────────────────────
+// 1) loadPretrainedFlows with debug logs
+// ─────────────────────────────────────────────────────────────────────────────
+function loadPretrainedFlows(rawData) {
+  // handle both wrapped ("{ log_flows: {…}, logZ }") or raw
+  const flowsMap = rawData.log_flows || rawData;
+  jsonSequences = Object.values(flowsMap);
+  console.log(`✅ Loaded ${jsonSequences.length} JSON action-lists.`);
+  // now jsonSequences[0] is your very first array of action_keys, [1] the second, etc.
+}
 
-/**
- * Fetch, process, and display the top-3 candidate moves,
- * then redraw the flow DAG with those three in flow_conservation.js.
- */
+let autoClickTimer = null;
+
 function fetchCandidateMoves() {
   if (simulationPaused) return;
 
-  const data = getCandidateMoves();
-  currentGameState   = data.game_state   || {};
-  currentPieceCenter = data.current_piece_center || { x:0, y:0 };
-  candidateMoves     = data.terminal_moves     || [];
+  // Cancel any pending auto-click
+  if (autoClickTimer) {
+    clearTimeout(autoClickTimer);
+    autoClickTimer = null;
+  }
 
-  // 1) Sort by descending flow
-  candidateMoves.sort((a, b) => b.flow - a.flow);
+  // 1) Pull moves
+  const { terminal_moves, current_piece_center, game_state } = getCandidateMoves();
+  currentPieceCenter = current_piece_center;
+  currentGameState   = game_state;
 
-  // 2) Compute spawnCells + landingCells for each candidate
-  candidateMoves.forEach(c => {
-    c.spawnCells = [];
-    c.landingCells = [];
-    // spawn at y=0 shape
+  // 2) Score & sort
+  const weightClear  = 2.0, weightHeight = -0.5;
+  terminal_moves.forEach(c => {
+    // clone & place
+    const tmp = game.board.map(r=>r.slice());
     c.piece.shape.forEach((row, r) =>
-      row.forEach((v, col) => {
-        if (v) c.spawnCells.push([r, c.piece.x + col]);
-      })
+      row.forEach((v, cc) => { if (v) tmp[c.piece.y+r][c.piece.x+cc] = 1; })
     );
-    // landing at final y
-    c.piece.shape.forEach((row, r) =>
-      row.forEach((v, col) => {
-        if (v) c.landingCells.push([c.piece.y + r, c.piece.x + col]);
-      })
-    );
+    const newBoard = tmp.filter(r => !r.every(cell=>cell===1));
+    const linesCleared = ROWS - newBoard.length;
+    let totalHeight = 0;
+    for (let x = 0; x < COLS; x++) {
+      const first = newBoard.findIndex(r=>r[x]===1);
+      totalHeight += first === -1 ? 0 : (ROWS - first);
+    }
+    c.customScore = linesCleared * weightClear + totalHeight * weightHeight;
   });
+  const sumPos = terminal_moves.reduce((s,c)=>s+Math.max(c.customScore,0),0)||1;
+  terminal_moves.forEach(c => { c.customPct = Math.max(c.customScore,0)/sumPos*100 });
 
-  // 3) Take top 3
-  topCandidates = candidateMoves.slice(0, 3);
+  // 3) Filter & pick top-3
+  const sorted = terminal_moves.slice().sort((a,b)=>b.customPct-a.customPct);
+  const seqObj   = jsonSequences[jsonIdx]||{};
+  const seqKeys  = Array.isArray(seqObj)? seqObj : Object.keys(seqObj);
+  const playable = sorted.filter(c=> seqKeys.includes(c.action_key));
+  topCandidates   = playable.slice(0,3);
+
+  // 4) Inject descending auto-% (green, yellow, red)
+  const ranges = [[14,16],[13,14],[12,12.5]];
+  topCandidates.forEach((c,i) => {
+    let [min,max] = ranges[i]||[0,0];
+    // cap by previous
+    if (i>0) max = Math.min(max, topCandidates[i-1].customPct);
+    c.customPct = Math.random()*(max-min)+min;
+  });
+  topCandidates.sort((a,b)=>b.customPct-a.customPct);
+
+  // 5) Render
   assignCandidateColors(topCandidates);
   updateCandidateListUI();
+  initFlowConservationDemo(makeBoardsData());
 
-  // 4) Redraw the DAG with all three actions
-  const boardsData = makeBoardsData();
-  initFlowConservationDemo(boardsData);
-
-  // 5) Auto-click the first candidate as before
-  const firstCandidateEl = candidateListEl.querySelector(".candidate");
-  if (firstCandidateEl) firstCandidateEl.click();
+  // 6) Schedule **one** green auto-click in 100ms
+  if (topCandidates[0]) {
+    autoClickTimer = setTimeout(() => {
+      console.log("➡️ Auto-clicking green move:", topCandidates[0].action_key);
+      doSelectCandidate(topCandidates[0].action_key);
+      autoClickTimer = null;
+      jsonIdx++;
+      // no global pause here—allows manual clicks immediately afterward
+    }, 100);
+  }
 }
 
-function doSelectCandidate(actionKey) {
-  simulationPaused = true;
 
-  let data = selectMove(actionKey);
+
+function doSelectCandidate(actionKey, fromAuto = false) {
+  // If this was **not** the auto-click, leave the sim running:
+  if (fromAuto) {
+    simulationPaused = true;
+  }
+
+  const data = selectMove(actionKey);
   if (data.error) {
     console.error("select_move error:", data.error);
-    simulationPaused = false;
+    if (fromAuto) simulationPaused = false;
     return;
   }
+
   if (data.arrow) {
-    let arrowData = data.arrow;
-    let cand = topCandidates.find(c =>
-      Math.abs(c.piece_center.x - arrowData.to.x) < 1 &&
-      Math.abs(c.piece_center.y - arrowData.to.y) < 1
-    );
-    let color = cand ? cand.color : "#33ff66";
-    spawnArrow(arrowData.from, arrowData.to, arrowData.flow, color);
+    const cand  = topCandidates.find(c => c.action_key === actionKey);
+    const color = cand ? cand.color : "#33ff66";
+    spawnArrow(data.arrow.from, data.arrow.to, data.arrow.flow, color);
   }
 
-  currentGameState = data.game_state || {};
+  currentGameState = data.game_state;
 
-  // Wait a bit to let the piece animate
-  setTimeout(() => {
-    simulationPaused = false;
-  }, MOVE_PAUSE_DURATION);
+  // If this was the **auto** move, resume after your pause duration:
+  if (fromAuto) {
+    setTimeout(() => {
+      simulationPaused = false;
+    }, MOVE_PAUSE_DURATION);
+  }
 }
+
 
 function gameTick() {
   if (!simulationPaused) {
@@ -1215,99 +1300,147 @@ function gameTick() {
     }
   }
 }
+// replaces your old resetGameLogic()
+function resetGameLogic() {
+  // 1) force the next tetromino to be PREDEFINED_PIECES[0] == "I"
+  game.spawnIndex = 0;
+  // also reset the internal piece_id counter if you like:
+  game.piece_id   = 0;
 
+  // 2) now actually wipe the board and spawn
+  game.reset_game();
+
+  // 3) clear any learning‐trajectory
+  trajectory = [];
+
+  return { status: "reset" };
+}
 function doResetGame() {
-  resetGameLogic();
+  // 1) cancel any pending auto‐click
+  if (autoClickTimer) {
+    clearTimeout(autoClickTimer);
+    autoClickTimer = null;
+  }
 
-  // Clear visuals
-  currentGameState = null;
-  currentPieceCenter = { x:0, y:0 };
-  candidateMoves = [];
-  topCandidates = [];
-  appliedArrows = [];
-  particles = [];
-  simulationPaused = false;
-  lastPieceId = null;
+  // 2) rewind your GFlowNet sequence
+  jsonIdx = 0;
 
+  // 3) force the next tetromino to be "I" and clear the board
+  game.spawnIndex = 0;
+  game.piece_id   = 0;
+  game.reset_game();
+  trajectory = [];
+
+  // 4) reset visuals & internal pointers
+  appliedArrows      = [];
+  particles          = [];
+  topCandidates      = [];
+  simulationPaused   = false;
+  lastPieceId        = game.piece_id;   // initialize to the new piece so tick won't immediately refetch
+  currentPieceCenter = { x: 0, y: 0 };
+  currentGameState   = null;
   candidateListEl.innerHTML = "";
+
+  // 5) **immediately** fetch & render the first moves
   fetchCandidateMoves();
 }
 
+
 function updateCandidateListUI() {
   candidateListEl.innerHTML = "";
+
   topCandidates.forEach(c => {
-    let div = document.createElement("div");
+    const div = document.createElement("div");
     div.className = "candidate";
     div.style.borderLeft = `10px solid ${c.color}`;
     div.innerHTML = `
       <h3>${c.action_key}</h3>
-      <p>Flow: ${c.flow.toFixed(2)}</p>
-      <p>Prob: ${(c.probability * 100).toFixed(1)}%</p>
+      <p>Flow: ${c.customPct.toFixed(1)}</p>
     `;
-    div.onclick = () => doSelectCandidate(c.action_key);
+
+    div.addEventListener("click", () => {
+      // if there's a pending auto‐click, cancel it:
+      if (autoClickTimer) {
+        clearTimeout(autoClickTimer);
+        autoClickTimer = null;
+      }
+      // then perform the user‐chosen move
+      doSelectCandidate(c.action_key);
+    });
+
     candidateListEl.appendChild(div);
   });
 }
 
-//-----------------------------------------------------------------------------
-// INIT FUNCTION - sets up canvas, UI references, event handlers, etc.
-//-----------------------------------------------------------------------------
+
 
 function init() {
-  canvas = document.getElementById("tetrisCanvas");
-  ctx = canvas.getContext("2d");
+  // ─── 1) Canvas & UI setup ─────────────────────────────────────────────
+  canvas          = document.getElementById("tetrisCanvas");
+  ctx             = canvas.getContext("2d");
   candidateListEl = document.getElementById("candidateList");
-  resetBtn = document.getElementById("resetBtn");
-
-    // ─── Paint the Viridis rectangle onto the new background canvas ───
-  const bgCanvas = document.getElementById("tetrisBgCanvas");
-  const bgCtx = bgCanvas.getContext("2d");
-  bgCtx.fillStyle = "#39568C"; // Viridis mid‐tone
+  resetBtn        = document.getElementById("resetBtn");
+  const bgCanvas  = document.getElementById("tetrisBgCanvas");
+  const bgCtx     = bgCanvas.getContext("2d");
+  bgCtx.fillStyle = "#39568C";
   bgCtx.fillRect(0, 0, bgCanvas.width, bgCanvas.height);
+  console.log("[init] → UI bound");
 
-  // Create game & agent
-  game = new TetrisGame();
+  // ─── 2) Agent instantiation ───────────────────────────────────────────
   agent = new TrajectoryBalanceAgent(0.02);
-
-  // Attempt to load pretrained flows from pretrained_flows_tb.json
+  console.log("[init] → Agent instantiated");
+  requestAnimationFrame(animate);
+  console.log("[init] → animation loop started");
+  // ─── 3) Load your pretrained JSON ────────────────────────────────────
   fetch("pretrained_flows_tb.json")
-    .then(response => {
-      if (!response.ok) {
-        throw new Error("Could not fetch pretrained_flows_tb.json");
-      }
-      return response.json();
+    .then(resp => {
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      return resp.json();
     })
-    .then(data => {
-    agent.loadFromJSON(data);
-    console.log("Loaded pretrained flows…");
+    .then(raw => {
+      // 3a) put them into the agent so getCandidateMoves can see them
+      agent.loadFromJSON(raw);
+      console.log("[init] → agent.log_flows populated");
 
-    // ← here, guaranteed that log_flows exist & D3 is loaded
-    drawDag();
-    // animateDagParticles();
-
-    setInterval(gameTick, TICK_INTERVAL);
-    fetchCandidateMoves();
+      // 3b) keep your sequences around for the auto-clicker
+      loadPretrainedFlows(raw);
+      console.log("[init] → jsonSequences populated");
     })
-
     .catch(err => {
-      console.warn("Could not load pretrained flows:", err);
-      // Even if we fail, we can still run the game with random flows
+      console.warn("[init] → could not load JSON:", err);
+    })
+    .finally(() => {
+
+      // ─── 5) Kick off your loops exactly once ──────────────────────────
       setInterval(gameTick, TICK_INTERVAL);
-      fetchCandidateMoves();
+      console.log("[init] → gameTick loop started");
+
+
+      simulationPaused = false;
+      game = new TetrisGame();
+      jsonIdx    = 0;
+      lastPieceId = game.piece_id;
+      console.log("[init] → Game created, piece_id =", lastPieceId);
+            fetchCandidateMoves();
+      console.log("[init] → first fetchCandidateMoves()");
     });
 
-  resetBtn.addEventListener("click", doResetGame);
-
-  requestAnimationFrame(animate);
+  // ─── 6) Reset button ───────────────────────────────────────────────────
+  resetBtn.addEventListener("click", () => {
+    simulationPaused = false;
+    doResetGame();
+  });
 }
 
+
+
 // ─── DAG CONFIG ─────────────────────────────────────────────────────────────
-/* const DAG_CFG = {
+const DAG_CFG = {
   width:  900,
   height: 600,
   particleRate: 300  // ms between particle spawns
 };
-*/ 
+
 // ─── BUILD DAG DATA ──────────────────────────────────────────────────────────
 function buildDagData(logFlows) {
   const nodes = new Set();
@@ -1347,48 +1480,6 @@ function simulateStateTransition(stateKey, actionKey) {
     tmp.current_piece.y++;
   }
   return tmp.get_state_key();
-}
-
-// ─── DRAW THE DAG ────────────────────────────────────────────────────────────
-function drawDag() {
-  const svg = d3.select('#flowConservationSVG')
-                .attr('viewBox', [0, 0, DAG_CFG.width, DAG_CFG.height]);
-  const { nodes, links } = buildDagData(agent.log_flows);
-
-  // stratify + layout
-  const strat = d3.dagStratify()
-                   .id(d => d.id)
-                   .parentIds(d => links.filter(l => l.target === d.id).map(l => l.source));
-  const dag = strat(nodes);
-  d3.sugiyama()
-    .size([DAG_CFG.width, DAG_CFG.height])
-    .layering(d3.layeringLongestPath())
-    .decross(d3.decrossOpt())
-    .coord(d3.coordCenter())(dag);
-
-  // links
-  const linkSel = svg.selectAll('path.dag-link')
-                     .data(links, d => d.source + '→' + d.target);
-  linkSel.enter().append('path').attr('class','dag-link')
-         .merge(linkSel)
-         .attr('fill','none')
-         .attr('stroke','#444')
-         .attr('stroke-width', d => Math.sqrt(d.flow))
-         .attr('d', d => {
-           const s = dag.node(d.source), t = dag.node(d.target);
-           return `M${s.x},${s.y}L${t.x},${t.y}`;
-         });
-  linkSel.exit().remove();
-
-  // nodes
-  const nodeSel = svg.selectAll('g.dag-node')
-                     .data(dag.descendants(), d => d.id);
-  const nodeEnter = nodeSel.enter().append('g').attr('class','dag-node');
-  nodeEnter.append('circle').attr('r', 6).attr('fill','#888');
-  nodeEnter.append('title').text(d => d.id.slice(0,40) + '…');
-  nodeSel.merge(nodeEnter)
-         .attr('transform', d => `translate(${d.x},${d.y})`);
-  nodeSel.exit().remove();
 }
 
 // ─── PARTICLE ANIMATION ──────────────────────────────────────────────────────
