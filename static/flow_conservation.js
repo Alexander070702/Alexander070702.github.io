@@ -99,7 +99,7 @@
     });
 
     // Particles: slower & smooth
-    const SPAWN_INT=200;      // spawn every 200ms
+    const SPAWN_INT=400;      // spawn every 200ms
     const DURATION=12000;     // 12s total travel
  setInterval(() => {
       // choose an action index by flow‐weighted sampling
