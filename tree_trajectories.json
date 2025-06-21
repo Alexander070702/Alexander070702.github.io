@@ -1,0 +1,67 @@
+[
+  {
+    "episode": 40,
+    "trajectory": [
+      {
+        "step": 0,
+        "piece": "I",
+        "action": "I_r2_x1",
+        "repr": []
+      },
+      {
+        "step": 1,
+        "piece": "O",
+        "action": "O_r0_x4",
+        "repr": []
+      },
+      {
+        "step": 2,
+        "piece": "T",
+        "action": "T_r3_x1",
+        "repr": []
+      },
+      {
+        "step": 3,
+        "piece": "S",
+        "action": "S_r2_x0",
+        "repr": []
+      },
+      {
+        "step": 4,
+        "piece": "Z",
+        "action": "Z_r3_x3",
+        "repr": []
+      },
+      {
+        "step": 5,
+        "piece": "J",
+        "action": "J_r2_x0",
+        "repr": []
+      },
+      {
+        "step": 6,
+        "piece": "L",
+        "action": "L_r1_x3",
+        "repr": []
+      },
+      {
+        "step": 7,
+        "piece": "I",
+        "action": "I_r0_x0",
+        "repr": []
+      },
+      {
+        "step": 8,
+        "piece": "O",
+        "action": "O_r0_x4",
+        "repr": []
+      },
+      {
+        "step": 9,
+        "piece": "T",
+        "action": "T_r0_x0",
+        "repr": []
+      }
+    ]
+  }
+]

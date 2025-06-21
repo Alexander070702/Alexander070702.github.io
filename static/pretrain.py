@@ -1,174 +1,200 @@
 import json
-import random
+import numpy as np
 import torch
-import copy
+import torch.nn as nn
+import torch.optim as optim
+from collections import OrderedDict
 
-class TetrisGame:
-    COLS = 10
-    ROWS = 20
-    BASE = ['I','O','T','S','Z','J','L']
-    TETROMINOES = {
-        'I': [[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]],
-        'O': [[1,1],[1,1]],
-        'T': [[0,1,0],[1,1,1],[0,0,0]],
-        'S': [[0,1,1],[1,1,0],[0,0,0]],
-        'Z': [[1,1,0],[0,1,1],[0,0,0]],
-        'J': [[1,0,0],[1,1,1],[0,0,0]],
-        'L': [[0,0,1],[1,1,1],[0,0,0]]
-    }
+# --- Tetromino definitions ---
+TETROMINOES = {
+    'I': np.array([[0,0,0,0], [1,1,1,1], [0,0,0,0], [0,0,0,0]]),
+    'O': np.array([[1,1], [1,1]]),
+    'T': np.array([[0,1,0], [1,1,1], [0,0,0]]),
+    'S': np.array([[0,1,1], [1,1,0], [0,0,0]]),
+    'Z': np.array([[1,1,0], [0,1,1], [0,0,0]]),
+    'J': np.array([[1,0,0], [1,1,1], [0,0,0]]),
+    'L': np.array([[0,0,1], [1,1,1], [0,0,0]]),
+}
+PIECE_ORDER     = ['I','O','T','S','Z','J','L']
+BOARD_WIDTH     = 10
+BOARD_HEIGHT    = 20
+MAX_STEPS       = 2000
 
-    def __init__(self, cols=None, rows=None):
-        self.cols = cols or self.COLS
-        self.rows = rows or self.ROWS
-        self._next_idx = 0
-        self._predefined = [self.BASE[i % len(self.BASE)] for i in range(1000)]
+# --- Proper Tetris environment ---
+class TetrisEnv:
+    def __init__(self):
+        self.width = BOARD_WIDTH
+        self.height = BOARD_HEIGHT
+        self.piece_order = PIECE_ORDER
         self.reset()
 
     def reset(self):
-        self.board = [[0]*self.cols for _ in range(self.rows)]
-        self.game_over = False
-        self.n_actions = 0
-        self._next_idx = 0
-        self.current_piece = self.spawn_piece()
+        self.board = np.zeros((self.height, self.width), dtype=int)
+        self.next_idx   = 0
+        self.step_count = 0
+        self.score = 0
+        self.current_piece = self._spawn_next()
+        return self._get_state()
 
-    def spawn_piece(self):
-        t_type = self._predefined[self._next_idx]
-        self._next_idx = (self._next_idx + 1) % len(self._predefined)
-        shape = copy.deepcopy(self.TETROMINOES[t_type])
-        x = (self.cols - len(shape[0])) // 2
-        piece = {'type': t_type, 'shape': shape, 'x': x, 'y': 0}
-        if self.collides(piece):
-            self.game_over = True
-        return piece
+    def _spawn_next(self):
+        t = self.piece_order[self.next_idx]
+        self.next_idx = (self.next_idx + 1) % len(self.piece_order)
+        return {'type': t,
+                'shape': TETROMINOES[t].copy().tolist(),
+                'x': 0, 'y': 0}
 
-    def collides(self, p):
-        for r,row in enumerate(p['shape']):
-            for c,val in enumerate(row):
-                if not val: continue
-                x,y = p['x']+c, p['y']+r
-                if x<0 or x>=self.cols or y>=self.rows or (y>=0 and self.board[y][x]):
-                    return True
+    def _get_state(self):
+        return {'board': self.board.tolist(),
+                'piece': {'type': self.current_piece['type'],
+                          'shape': self.current_piece['shape'],
+                          'x': 0, 'y': 0}}
+
+    def _collides(self, shape, x, y):
+        h, w = shape.shape
+        for i in range(h):
+            for j in range(w):
+                if shape[i, j]:
+                    xi = x + j
+                    yi = y + i
+                    if xi < 0 or xi >= self.width or yi < 0 or yi >= self.height:
+                        return True
+                    if self.board[yi, xi]:
+                        return True
         return False
 
-    def clear_lines(self):
-        newb = [r for r in self.board if not all(r)]
-        cleared = self.rows - len(newb)
-        self.board = [[0]*self.cols for _ in range(cleared)] + newb
-        return cleared
+    def _clear_lines(self):
+        new_board = []
+        lines_cleared = 0
+        for row in self.board:
+            if all(cell == 1 for cell in row):
+                lines_cleared += 1
+            else:
+                new_board.append(row.tolist())
+        for _ in range(lines_cleared):
+            new_board.insert(0, [0]*self.width)
+        self.board = np.array(new_board, dtype=int)
+        return lines_cleared
 
-    def lock_piece(self):
-        p = self.current_piece
-        for r,row in enumerate(p['shape']):
-            for c,val in enumerate(row):
-                if val:
-                    self.board[p['y']+r][p['x']+c] = 1
-        self.clear_lines()
-        self.current_piece = self.spawn_piece()
+    def step(self, action):
+        r, x_pos = action
+        shape = np.array(self.current_piece['shape'])
+        if r > 0:
+            shape = np.rot90(shape, -r)
+        y = 0
+        while not self._collides(shape, x_pos, y+1):
+            y += 1
+        h, w = shape.shape
+        for i in range(h):
+            for j in range(w):
+                if shape[i, j]:
+                    xi = x_pos + j
+                    yi = y + i
+                    if 0 <= yi < self.height and 0 <= xi < self.width:
+                        self.board[yi, xi] = 1
+        lines = self._clear_lines()
+        self.score += lines
+        self.current_piece = self._spawn_next()
+        self.step_count += 1
+        done = (self.step_count >= MAX_STEPS)
+        reward = 1.0 if done else 0.0
+        return self._get_state(), reward, done
 
-    def get_state_key(self):
-        return json.dumps({'board': self.board, 'next': self.current_piece['type']}, separators=(',',':'))
+# --- GFlowNet Agent with learnable logZ ---
+class GFlowNetAgent(nn.Module):
+    def __init__(self, board_size, n_piece_types, hidden_dim=128):
+        super().__init__()
+        inp_dim  = board_size + n_piece_types
+        out_dim  = 4 * BOARD_WIDTH
+        self.net = nn.Sequential(
+            nn.Linear(inp_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, out_dim)
+        )
+        self.logZ = nn.Parameter(torch.zeros(()))
 
-    def get_terminal_moves(self):
-        if self.game_over:
-            return []
-        orig = self.current_piece
-        base = self.TETROMINOES[orig['type']]
-        moves = []
-        rots = [0] if orig['type']=='O' else [0,1,2,3]
-        for rot in rots:
-            shape = copy.deepcopy(base)
-            for _ in range(rot):
-                shape = list(map(list, zip(*shape[::-1])))
-            angle = rot*90
-            w = len(shape[0])
-            for x in range(self.cols-w+1):
-                test = {'type':orig['type'], 'shape':shape, 'x':x, 'y':0}
-                if self.collides(test): continue
-                y = 0
-                while not self.collides({'type':orig['type'],'shape':shape,'x':x,'y':y+1}) and y < self.rows:
-                    y += 1
-                test['y'] = y
-                key = f"{orig['type']}_r{angle}_x{x}"
-                moves.append({'action_key': key, 'placement': test})
-        return moves
+    def forward(self, board, piece_onehot):
+        x    = torch.cat([board.flatten().float(), piece_onehot.float()])
+        logF = self.net(x).view(4, BOARD_WIDTH)
+        return logF
 
-    def step(self, placement):
-        self.current_piece = placement
-        self.lock_piece()
-        self.n_actions += 1
-        return None, None, not self.game_over
+# --- Utility ---
+def one_hot(idx, size):
+    v = torch.zeros(size)
+    v[idx] = 1.0
+    return v
 
-class TrajectoryBalanceAgent:
-    def __init__(self, lr=0.01):
-        self.log_flows = {}
-        self.logZ = 0.0
-        self.lr = lr
+# --- Training with top-3 trajectory retention ---
+def train_and_export(num_episodes=500, lr=1e-3, output_path='pretrained_flows_tb.json'):
+    env = TetrisEnv()
+    agent = GFlowNetAgent(BOARD_WIDTH*BOARD_HEIGHT, len(PIECE_ORDER))
+    optimizer = optim.Adam(agent.parameters(), lr=lr)
 
-    def _ensure(self, s, a):
-        self.log_flows.setdefault(s, {})
-        if a not in self.log_flows[s]:
-            self.log_flows[s][a] = torch.log(torch.tensor(0.5 + random.random()))
+    # Keep only the best 3 episodes by score
+    best_episodes = []  # list of tuples (score, episode_flows)
+    log_flows = OrderedDict()
 
-    def get_flow(self, s, a):
-        self._ensure(s, a)
-        return torch.exp(self.log_flows[s][a]).item()
+    for ep in range(1, num_episodes+1):
+        state = env.reset()
+        trajectory = []
+        episode_flows = OrderedDict()
+        done = False
+        step = 0
 
-    def sample(self, s, cands):
-        for c in cands:
-            self._ensure(s, c['action_key'])
-        logs = torch.stack([self.log_flows[s][c['action_key']] for c in cands])
-        probs = torch.softmax(logs, 0).tolist()
-        idx = random.choices(range(len(cands)), weights=probs, k=1)[0]
-        return cands[idx]
+        while not done:
+            step += 1
+            board_t = torch.tensor(state['board'])
+            pt = state['piece']
+            pt_idx = PIECE_ORDER.index(pt['type'])
+            piece_t = one_hot(pt_idx, len(PIECE_ORDER))
 
-    def update(self, traj, reward):
-        R = max(reward, 1e-2)
-        logR = torch.log(torch.tensor(R))
-        sum_logp = 0
-        for s,a in traj:
-            logs = torch.tensor(list(self.log_flows[s].values()))
-            denom = torch.logsumexp(logs, 0)
-            sum_logp += (self.log_flows[s][a] - denom)
-        diff = sum_logp - (logR - self.logZ)
-        self.logZ += self.lr * diff.item()
-        for s,a in traj:
-            self.log_flows[s][a] -= self.lr * diff
+            logF = agent(board_t, piece_t)
+            m = logF.max()
+            probs = (logF - m).exp()
+            probs = probs / probs.sum()
 
-def run_episode(env, agent):
-    env.reset()
-    state_map = {}
-    traj = []
-    while True:
-        key = env.get_state_key()
-        moves = env.get_terminal_moves()
-        if not moves:
-            break
-        # record top-3 by flow
-        flows = [(agent.get_flow(key, m['action_key']), m['action_key']) for m in moves]
-        flows.sort(reverse=True)
-        state_map[key] = [a for _, a in flows[:3]]
-        choice = agent.sample(key, moves)
-        traj.append((key, choice['action_key']))
-        _, _, ok = env.step(choice['placement'])
-        if not ok:
-            break
-    return env.n_actions, traj, state_map
+            key = json.dumps(state, separators=(',',':'))
+            flows = {f"r{r}_x{c}": float(probs[r,c].item())
+                     for r in range(4) for c in range(BOARD_WIDTH)}
+            episode_flows[key] = flows
 
-def main(episodes=1000, out='best.json'):
-    agent = TrajectoryBalanceAgent(0.01)
-    best_reward = -1
-    best_map = {}
-    for ep in range(1, episodes+1):
-        r, tr, sm = run_episode(TetrisGame(), agent)
-        if r > best_reward:
-            best_reward = r
-            best_map = sm
-            with open(out, 'w') as f:
-                json.dump(best_map, f)
-            print(f"New best {best_reward} at ep {ep}")
-        else:
-            print(f"Ep {ep}: r={r} (best={best_reward})")
-    print(f"Done. Best reward: {best_reward}")
+            flat = probs.flatten()
+            idx = torch.multinomial(flat, 1).item()
+            r_act, x_act = divmod(idx, BOARD_WIDTH)
+            trajectory.append((board_t, piece_t, idx))
+
+            state, reward, done = env.step((r_act, x_act))
+
+        # TB update
+        final_reward = max(reward, 1e-8)
+        logR = torch.log(torch.tensor(final_reward))
+        sum_logF = torch.zeros(())
+        for b,p,i in trajectory:
+            sum_logF += agent(b,p).flatten()[i]
+        loss = (sum_logF + logR - agent.logZ).pow(2)
+        optimizer.zero_grad(); loss.backward(); optimizer.step()
+
+        score = env.score
+        # Insert into best_episodes if qualifies
+        best_episodes.append((score, episode_flows))
+        # Keep top 3 by score
+        best_episodes = sorted(best_episodes, key=lambda x: x[0], reverse=True)[:3]
+
+        # Rebuild global log_flows from best_episodes
+        log_flows.clear()
+        for _, flows_dict in best_episodes:
+            for sk, fdict in flows_dict.items():
+                log_flows[sk] = fdict
+
+        print(f"Episode {ep}/{num_episodes}, score={score}, best_scores={[b for b,_ in best_episodes]}")
+
+    # Export only best trajectories' flows
+    out = {'log_flows': log_flows, 'logZ': float(agent.logZ.item())}
+    with open(output_path, 'w') as f:
+        json.dump(out, f, separators=(',',':'), ensure_ascii=False)
+    print(f"Saved pretrained flows (top 3 trajectories) to {output_path}")
 
 if __name__ == '__main__':
-    main()
+    train_and_export(num_episodes=100, lr=1e-3)
+    print("done :)")
