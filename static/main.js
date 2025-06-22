@@ -3,9 +3,18 @@ let ortSession = null;
 
 // Call this once during init()
 async function loadGFlowNetModel() {
-  // assuming gfn.onnx lives in the same folder as your HTML page
-  ortSession = await ort.InferenceSession.create('./gfn.onnx');
-  console.log('✅ ONNX model loaded');
+  // Try a couple common filenames in case the exported model name changes
+  const candidates = ['./gfn.onnx', './gfn_path_b.onnx'];
+  for (const path of candidates) {
+    try {
+      ortSession = await ort.InferenceSession.create(path);
+      console.log('✅ ONNX model loaded');
+      return;
+    } catch (err) {
+      console.warn(`Failed loading ${path}:`, err);
+    }
+  }
+  throw new Error('Unable to load ONNX model');
 }
 /*
   -------------------------------------------------------------------------------
@@ -922,8 +931,13 @@ async function computeFlowsForState(game) {
   const results = await ortSession.run(feeds);
 
   // 4) Extract the raw log-flows (shape [1,40] → we ignore batch dim)
-  // output tensor is named "logits" in the exported ONNX model
-  const logFdata = results.logits.data; // Float32Array length 40
+  // Depending on the export script, the output tensor may be named
+  // either "logits" or "logF". Support both for robustness.
+  const outTensor = results.logits || results.logF || results['logF'];
+  if (!outTensor) {
+    throw new Error('ONNX output tensor not found');
+  }
+  const logFdata = outTensor.data; // Float32Array length 40
 
   // 5) Map back into action_key → log-flow dictionary
   const flows = {};
