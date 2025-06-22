@@ -326,6 +326,17 @@ lock_piece() {
     this.target_piece = null;
     this.cached_moves = null;
     this._cached_state_key = null;
+
+    // ── NEW: Immediately push the updated state to the renderer ───────────
+    currentGameState = {
+      board:         this.board,
+      current_piece: this.current_piece,
+      score:         this.score,
+      game_over:     this.game_over,
+      piece_id:      this.piece_id
+    };
+    draw();
+    fetchCandidateMoves();
   }
 
   /**
