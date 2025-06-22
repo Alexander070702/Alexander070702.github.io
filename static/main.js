@@ -1,5 +1,6 @@
 "use strict";
 let ortSession = null;
+let scoringInProgress = false;
 
 // Call this once during init()
 async function loadGFlowNetModel() {
@@ -896,42 +897,60 @@ function selectMove(actionKey = null) {
     }
   };
 }
+/**
+ * computeFlowsForState: Run the ONNX model once (throttled), return
+ *                      a map { action_key → log-flow }.
+ */
 async function computeFlowsForState(game) {
-  // 1) Flatten the board into a 1×20×10 tensor
-  const flatBoard = game.board.flat();
-  const boardTensor = new ort.Tensor(
-    "float32",
-    new Float32Array(flatBoard),
-    [1, ROWS, COLS]    // ← note the leading batch dim of 1
-  );
-
-  // 2) Build the one-hot piece vector as a 1×7 tensor
-  const oneHot = new Float32Array(7).fill(0);
-  oneHot['IOTSZJL'.indexOf(game.current_piece.type)] = 1;
-  const pieceTensor = new ort.Tensor(
-    "float32",
-    oneHot,
-    [1, 7]            // ← batch dim of 1 here too
-  );
-
-  // 3) Run ONNX inference
-  const feeds = {
-    board: boardTensor,
-    piece_onehot: pieceTensor
-  };
-  const results = await ortSession.run(feeds);
-
-  // 4) Extract the raw log-flows (shape [1,40] → we ignore batch dim)
-  const logFdata = results.logF.data; // Float32Array length 40
-
-  // 5) Map back into action_key → log-flow dictionary
-  const flows = {};
-  for (let c of game.get_terminal_moves()) {
-    const [r, x] = c.action_key.slice(1).split('_x').map(Number);
-    flows[c.action_key] = logFdata[r * COLS + x];
+  // 1) If a score is already in progress, bail out immediately.
+  if (scoringInProgress) {
+    return {};
   }
-  return flows;
+  scoringInProgress = true;
+
+  try {
+    // — Build the input tensors exactly as before —
+    const flatBoard = game.board.flat();
+    const boardTensor = new ort.Tensor(
+      "float32",
+      new Float32Array(flatBoard),
+      [1, ROWS, COLS]
+    );
+
+    const oneHot = new Float32Array(7).fill(0);
+    oneHot['IOTSZJL'.indexOf(game.current_piece.type)] = 1;
+    const pieceTensor = new ort.Tensor(
+      "float32",
+      oneHot,
+      [1, 7]
+    );
+
+    const feeds = {
+      board: boardTensor,
+      piece_onehot: pieceTensor
+    };
+
+    // 2) Run the ONNX session (await so we don’t overlap calls)
+    const results = await ortSession.run(feeds);
+
+    // 3) ***Use the correct output name*** ("logits"), not "logF"
+    const logFdata = results.logits.data;  
+
+    // 4) Map each terminal move back to its log-flow
+    const flows = {};
+    for (let c of game.get_terminal_moves()) {
+      // action_key is of the form "r{rot}_x{x}"
+      const [r, x] = c.action_key.slice(1).split('_x').map(Number);
+      flows[c.action_key] = logFdata[r * COLS + x];
+    }
+    return flows;
+
+  } finally {
+    // 5) Clear the in-flight flag so future calls can proceed
+    scoringInProgress = false;
+  }
 }
+
 
 async function selectMove(actionKey = null) {
   // 1) If the game is already over, bail early
