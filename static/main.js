@@ -1062,6 +1062,9 @@ function tickGameLogic() {
     agent.update_trajectory(trajectory, final_reward);
     trajectory = [];
     game.reset_game();
+    candidateListEl.innerHTML = "";
+    lastPieceId = null;
+    inputPaused = false;
   }
 
   // If a new piece was spawned, recalc new terminal moves
@@ -1409,12 +1412,12 @@ function draw() {
 let inputPaused = false;    // only blocks clicks & fetchCandidateMoves
 // remove any check of simulationPaused in gameTick()
 
-function doSelectCandidate(actionKey) {
+async function doSelectCandidate(actionKey) {
   if (inputPaused) return;       // ignore extra clicks while animating
   inputPaused = true;
 
   // Execute the move (as before)…
-  const data = selectMove(actionKey);
+  const data = await selectMove(actionKey);
   if (data.error) {
     console.error("selectMove error:", data.error);
     inputPaused = false;
@@ -1495,6 +1498,7 @@ function doResetGame() {
   particles = [];
   simulationPaused = false;
   lastPieceId = null;
+  inputPaused = false;
 
   candidateListEl.innerHTML = "";
   fetchCandidateMoves();
