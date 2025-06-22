@@ -922,8 +922,7 @@ async function computeFlowsForState(game) {
   const results = await ortSession.run(feeds);
 
   // 4) Extract the raw log-flows (shape [1,40] → we ignore batch dim)
-  // output tensor is named "logits" in the exported ONNX model
-  const logFdata = results.logits.data; // Float32Array length 40
+  const logFdata = results.logF.data; // Float32Array length 40
 
   // 5) Map back into action_key → log-flow dictionary
   const flows = {};
