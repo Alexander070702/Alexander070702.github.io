@@ -888,19 +888,20 @@ img {
       <h2>1. Introduction: Generative Flow Networks</h2>
       
       <p>
-        A <strong>Generative Flow Network (GFlowNet)</strong> is a generative model 
-        that learns to produce <em>multiple</em> high-quality solutions 
-        (e.g., game moves, molecule designs) in proportion to their “reward.” 
-        In other words, unlike many traditional AI methods such as reinforcement learning, it does not pursue just a single optimal path. Instead it maintains a 
-        <em>diverse distribution</em> over near-optimal solutions. 
+        A <strong>Generative Flow Network (GFlowNet)</strong> distributes probability
+        mass over a directed acyclic graph so that entire objects are sampled in
+        proportion to a user‑defined reward. Rather than chasing a single best
+        policy as in conventional reinforcement learning, a GFlowNet learns to
+        sample <em>many</em> high‑value outcomes.
       </p>
-  
+
       <p>
-        Why does this matter? Because in real-world scenarios 
-        like <strong>drug discovery</strong> or <strong>Tetris</strong>, you often want a <em>range</em> of 
-        strong candidates. This way you can explore them all in parallel in the real world, if one fails another one might succeed. GFlowNets handle 
-        this by learning to <em>flow</em> probability across all good options, which 
-        leads to broader exploration and <strong>robustness</strong> when conditions change.
+        This proportional sampling is valuable whenever several solutions are
+        nearly as good as one another—for example in
+        <strong>drug discovery</strong> or complex games like
+        <strong>Tetris</strong>. By spreading flow across promising paths the
+        network encourages exploration and maintains robustness if the perceived
+        optimum later changes.
       </p>
   
       <!-- Comparison Chart: single-path vs. multi-path -->
@@ -913,11 +914,11 @@ img {
       </script>
   
       <p>
-        The comparison above highlights how “Traditional RL” may fixate on 
-        one route, while a “GFlowNet” balances probability across many. 
-        If you imagine each <em>path</em> as a way to build a solution, a GFlowNet 
-        keeps multiple paths viable. This is especially helpful when you can not be sure 
-        which path is truly the best.
+        The chart contrasts a single‑path reinforcement learner with a
+        GFlowNet that spreads its probability mass over several trajectories.
+        Each route in the figure represents a different construction strategy.
+        By maintaining more than one plausible path, the network preserves
+        alternatives when the optimal choice is uncertain.
       </p>
   
 
@@ -937,10 +938,16 @@ img {
     <div class="section-content">
       <h2>2. Tetris GFlowNet Demonstration</h2>
       <p>
-        In this demonstration, a pretrained GFlowNet governs an interactive game of Tetris. At each decision point, the model assigns to each feasible move a flow value reflecting the strength of its learned preference. Being pretrained, move selection is predominantly exploitative, with only minimal stochastic sampling of lower‐flow alternatives. By embedding the objective of maximizing play duration within the flow distribution, the GFlowNet’s choices approximate a high-reward move distribution.
+        This interactive demo showcases a neural policy trained with the
+        GFlowNet objective. For every legal placement of the falling piece, the
+        network predicts a flow value that estimates the long‑term reward of that
+        move. During play the highest‑flow option is typically chosen, although
+        occasional exploration lets you observe alternative strategies.
       </p>
       <p>
-        The panel on the right enumerates the current top-ranked candidate moves for the given board configuration. By default, the network executes green action. However, you may override this by clicking any other move to observe its impact on subsequent gameplay.
+        The sidebar lists the candidate moves ranked by their flows. Clicking a
+        move forces the agent to adopt it so you can see how the board evolves
+        and how the subsequent flows change.
       </p>
       
       
@@ -1057,28 +1064,24 @@ img {
       <h2>3. Understanding GFlowNets</h2>
       
       <p>
-        GFlowNets learn to generate different solutions by giving each one a chance 
-        based on how “good” it is. If a solution is better (or has a higher “reward”), 
-        the GFlowNet will pick it more often. This also leaves room for other strong 
-        solutions, so you do not get stuck with just a single “winner.”
+        A GFlowNet constructs an object one step at a time in a DAG. Each partial
+        state is extended by actions until a terminal object is produced and
+        evaluated by a reward function.
       </p>
-  
+
       <p>
-        A helpful way to picture this is to imagine water flowing through a network 
-        of pipes. Each node in the network is a partial step toward a final solution. 
-        Each edge is a possible move that sends some of the water forward. A reward 
-        acts like the size of the container at the end of each path: bigger rewards 
-        gather more water, so those solutions appear more frequently. Smaller rewards 
-        still collect some water too, which prevents them from being ignored.
+        Imagine water flowing through a branching set of pipes. The amount of
+        water reaching each endpoint should match the reward of the object at
+        that node. Because the flow at every junction must be conserved,
+        even less promising paths retain some probability and are not pruned too
+        early.
       </p>
-  
+
       <p>
-        This design relies on <em>flow conservation</em>. It means any flow that enters 
-        a node must exit it along one of the available paths. Nothing is lost or created 
-        midstream. In practice, this simple rule ensures that high-reward solutions end 
-        up with more flow, yet other options receive some flow as well. The diagram below 
-        illustrates how different paths share in this flow of probability, making 
-        GFlowNets valuable for tasks that need multiple strong outcomes.
+        The following visualization shows how probability is divided among
+        several paths. High‑reward solutions gather most of the flow, but
+        alternative routes remain accessible, which is essential when multiple
+        outcomes are worthwhile.
       </p>
  
   
@@ -1097,20 +1100,19 @@ SECTION 4: GFlowNet Core Concepts & Flow Conservation with Molecule Visualizatio
   <div class="section-content">
     <h2>4. Core Concepts & Flow Conservation</h2>
     
-    <p>
-      In this section, we take a look at how GFlowNets can help build complex objects like molecules. 
-      The idea is to treat each molecule as a path in a Directed Acyclic Graph (DAG), where each node represents 
-      a partial structure and each edge represents an action that adds or changes something about that structure. 
-      You progress step by step until you reach a fully formed molecule at a terminal node.
-    </p>
-    
-    <p>
-      The principle of <strong>flow conservation</strong> ensures that any flow entering a node must be 
-      distributed among its outgoing edges. A molecule with a higher “reward” (for instance, a better prediction 
-      for binding to a target protein) naturally receives more flow. This means GFlowNets are not locked onto 
-      one single candidate; they encourage multiple promising solutions. That diversity can be crucial when 
-      searching large spaces, such as all possible molecules you might want to synthesize and test.
-    </p>
+      <p>
+        In molecular design each action can be viewed as adding a fragment to an
+        evolving structure. A GFlowNet samples these actions along a DAG until a
+        complete molecule is built and scored by a reward function such as
+        binding affinity or synthesizability.
+      </p>
+
+      <p>
+        Thanks to <strong>flow conservation</strong>, the incoming probability at
+        every intermediate structure is redistributed to its children. Higher
+        rewards draw more flow, leading to more frequent sampling of promising
+        molecules while still exploring alternative branches of the space.
+      </p>
 <div id="weights">
   <label>
     Weight:
@@ -1156,13 +1158,20 @@ SECTION 4: GFlowNet Core Concepts & Flow Conservation with Molecule Visualizatio
 
       <br>
       <p>
-        The flow starts from a single origin and immediately fans out into three main pathways—each representing a broad molecular backbone. The width of each path shows how much of the total 100% “probability mass” goes that way (roughly 55%, 37%, and 8%).
+        The Sankey diagram below begins with a single root state and shows how
+        probability divides among several backbone structures. Link widths are
+        proportional to the share of total probability mass flowing through that
+        transition.
       </p>
       <p>
-        Each of those three backbones then splits again into three more specific molecule designs. Along each branch you’ll see labeled flows (e.g. 28, 14, 13, etc.), which translate directly into sampling frequencies: “28” means that particular candidate will appear about 28% of the time across many draws.
+        Each backbone further splits into specific molecules. The numeric labels
+        denote the expected sampling frequency for each candidate. Adjusting the
+        weights above changes these flows in real time.
       </p>
       <p>
- This two-stage layout makes it easy to see which general structures the model prefers, while still keeping lower-probability options in view.
+        This visualization reveals which scaffolds the network prefers while
+        still highlighting less probable alternatives that might deserve further
+        study.
       </p>
 
 
