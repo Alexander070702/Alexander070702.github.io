@@ -1343,9 +1343,10 @@ async function fetchCandidateMoves() {
 
     updateCandidateListUI();
 
-    // auto-click first
-    const first = candidateListEl.querySelector('.candidate');
-    if (first) first.click();
+    // autopilot: play the green (top) move if the user hasn't clicked yet
+    if (!inputPaused && topCandidates.length) {
+      autoPlayCandidate(topCandidates[0].action_key);
+    }
   } catch(err) {
     console.error("Error scoring:", err);
     candidateListEl.innerHTML = `<div class="error">failed</div>`;
@@ -1439,6 +1440,25 @@ async function doSelectCandidate(actionKey) {
   }, MOVE_PAUSE_DURATION);
 }
 
+// autopilot helper: play a candidate without blocking user input
+async function autoPlayCandidate(actionKey) {
+  if (inputPaused) return;
+  const data = await selectMove(actionKey);
+  if (data.error) {
+    console.error("selectMove error:", data.error);
+    return;
+  }
+  if (data.arrow) {
+    const { from, to, flow } = data.arrow;
+    const cand = topCandidates.find(c =>
+      Math.abs(c.piece_center.x - to.x) < 1 &&
+      Math.abs(c.piece_center.y - to.y) < 1
+    );
+    spawnArrow(from, to, flow, cand?.color || "#33ff66");
+  }
+  currentGameState = data.game_state;
+}
+
 
 // -----------------------------------------------------------------------------
 // 2) gameTick — advance logic, THEN redraw instantly, THEN kick off fetch
@@ -1478,7 +1498,9 @@ async function fetchCandidateMoves() {
     topCandidates = candidateMoves.slice(0,3);
     assignCandidateColors(topCandidates);
     updateCandidateListUI();
-    candidateListEl.querySelector(".candidate")?.click();
+    if (!inputPaused && topCandidates.length) {
+      autoPlayCandidate(topCandidates[0].action_key);
+    }
   } catch(err) {
     console.error("Error scoring:", err);
     candidateListEl.innerHTML = `<div class="error">failed</div>`;
