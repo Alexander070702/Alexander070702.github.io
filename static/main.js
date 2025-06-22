@@ -1410,12 +1410,17 @@ function draw() {
 }
 
 // at top‐level:
-let inputPaused = false;    // only blocks clicks & fetchCandidateMoves
+let inputPaused = false;    // blocks auto-play; user clicks will still work
+let inputPauseTimer = null; // holds timeout ID so we can reset the pause
 // remove any check of simulationPaused in gameTick()
 
 async function doSelectCandidate(actionKey) {
-  if (inputPaused) return;       // ignore extra clicks while animating
+  // allow overriding even while paused
   inputPaused = true;
+  if (inputPauseTimer) {
+    clearTimeout(inputPauseTimer);
+    inputPauseTimer = null;
+  }
 
   // Execute the move (as before)…
   const data = await selectMove(actionKey);
@@ -1435,8 +1440,9 @@ async function doSelectCandidate(actionKey) {
   currentGameState = data.game_state;
 
   // only block fetch/clicks; the tick+draw loop still runs
-  setTimeout(() => {
+  inputPauseTimer = setTimeout(() => {
     inputPaused = false;
+    inputPauseTimer = null;
   }, MOVE_PAUSE_DURATION);
 }
 
