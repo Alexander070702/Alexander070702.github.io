@@ -207,7 +207,7 @@ class TetrisGame {
     type: t_type,
     shape: shape,
     x: Math.floor((this.cols - shape[0].length) / 2),
-    y: 0
+    y: 1
   };
 
   // If it collides immediately, game over
