@@ -1742,8 +1742,7 @@ async function init() {
 
   // 6) Reset‐button & optional pretrained flows
   resetBtn.addEventListener("click", doResetGame);
-  fetch("pretrained_flows_tb.json")
-    .then(res => res.json())
+    res => res.json()
     .then(data => agent.loadFromJSON(data))
     .catch(()=>{/* ignore if none */});
 }
