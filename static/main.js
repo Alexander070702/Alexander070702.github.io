@@ -167,6 +167,99 @@ function hexToRgb(hex) {
   };
 }
 
+// -----------------------------------------------------------------------------
+// Heuristic Scoring (inspired by ProHeuristic in imp.py)
+// -----------------------------------------------------------------------------
+const HEURISTIC_WEIGHTS = [-4.5, -7.9, -3.4, -3.2, -3.1, -3.3, 4.5];
+const HEURISTIC_MIX = 0.05; // weight for heuristic when combining with log flows
+
+function computeBoardFeatures(board) {
+  const heights = new Array(COLS).fill(0);
+  for (let c = 0; c < COLS; c++) {
+    for (let r = 0; r < ROWS; r++) {
+      if (board[r][c]) {
+        heights[c] = ROWS - r;
+        break;
+      }
+    }
+  }
+  const aggHeight = heights.reduce((a, b) => a + b, 0);
+  const bumpiness = heights.slice(1).reduce((s, h, i) => s + Math.abs(h - heights[i]), 0);
+
+  let holes = 0;
+  let holeDepth = 0;
+  let rowTrans = 0;
+
+  for (let r = 0; r < ROWS; r++) {
+    let rowHasBlock = false;
+    for (let c = 0; c < COLS; c++) {
+      const filled = board[r][c];
+      if (filled) rowHasBlock = true;
+      if (c > 0 && board[r][c - 1] !== filled) rowTrans++;
+    }
+    if (!board[r][0]) rowTrans++;
+    if (!board[r][COLS - 1]) rowTrans++;
+
+    if (rowHasBlock) {
+      for (let c = 0; c < COLS; c++) {
+        if (!board[r][c] && heights[c] > (ROWS - r)) {
+          holes++;
+          let depth = 0;
+          for (let rr = 0; rr < r; rr++) {
+            if (board[rr][c]) depth++;
+          }
+          holeDepth += depth;
+        }
+      }
+    }
+  }
+
+  let wells = 0;
+  for (let c = 0; c < COLS; c++) {
+    for (let r = 0; r < ROWS; r++) {
+      if (!board[r][c]) {
+        const leftWall = (c === 0) || board[r][c - 1];
+        const rightWall = (c === COLS - 1) || board[r][c + 1];
+        if (leftWall && rightWall) {
+          let depth = 0;
+          for (let rr = r; rr < ROWS && !board[rr][c]; rr++) depth++;
+          wells += (depth * (depth + 1)) / 2;
+          break;
+        }
+      }
+    }
+  }
+
+  return [aggHeight, holes, holeDepth, rowTrans, bumpiness, wells];
+}
+
+function heuristicForBoard(board, linesCleared) {
+  const feats = computeBoardFeatures(board);
+  const lineReward = Math.pow(linesCleared, 1.5);
+  feats.push(lineReward);
+  return feats.reduce((s, v, i) => s + v * HEURISTIC_WEIGHTS[i], 0);
+}
+
+function heuristicScoreCandidate(board, cand) {
+  const newBoard = deepCopy(board);
+  const p = cand.piece;
+  for (let r = 0; r < p.shape.length; r++) {
+    for (let c = 0; c < p.shape[r].length; c++) {
+      if (p.shape[r][c]) newBoard[p.y + r][p.x + c] = 1;
+    }
+  }
+  let linesCleared = 0;
+  for (let r = ROWS - 1; r >= 0; r--) {
+    if (newBoard[r].every(v => v)) {
+      newBoard.splice(r, 1);
+      newBoard.unshift(new Array(COLS).fill(0));
+      linesCleared++;
+    }
+  }
+  return heuristicForBoard(newBoard, linesCleared);
+}
+
+
 class TetrisGame {
   /**
    * constructor: Create a TetrisGame with default COLS/ROWS if none provided.
@@ -995,18 +1088,23 @@ async function selectMove(actionKey = null) {
     agent.log_flows[state_key] = flows;  // cache for future moves
   }
 
+  // Compute heuristic scores for each candidate
+  const heuristics = cands.map(c => heuristicScoreCandidate(game.board, c));
+
   // 5) Pick the move
   let selected = null;
   if (actionKey !== null) {
     // If caller forced a specific action, honor it
     selected = cands.find(c => c.action_key === actionKey);
   } else {
-    // Otherwise, greedy argmax on log‐flow
-    let bestLogF = -Infinity;
-    for (let c of cands) {
+    // Otherwise, argmax of combined score (log-flow + heuristic)
+    let bestScore = -Infinity;
+    for (let i = 0; i < cands.length; i++) {
+      const c = cands[i];
       const lf = flows[c.action_key] !== undefined ? flows[c.action_key] : -Infinity;
-      if (lf > bestLogF) {
-        bestLogF = lf;
+      const score = lf + HEURISTIC_MIX * heuristics[i];
+      if (score > bestScore) {
+        bestScore = score;
         selected = c;
       }
     }
