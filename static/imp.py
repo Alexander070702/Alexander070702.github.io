@@ -245,8 +245,8 @@ class ProHeuristic:
     def __init__(self, weights: Optional[np.ndarray] = None):
         if weights is None:
             # New weights for: [agg_height, holes, hole_depth, row_transitions, bumpiness, wells, lines_cleared^1.5]
-            # These weights are more aggressive in penalizing imperfections.
-            self.weights = torch.tensor([-4.5, -7.9, -3.4, -3.2, -3.1, -3.3, 6.0], dtype=torch.float32)
+            # Heavily favor line clears and keeping the stack low.
+            self.weights = torch.tensor([-5.0, -8.5, -4.0, -3.5, -3.4, -3.8, 7.5], dtype=torch.float32)
         else:
             self.weights = torch.tensor(weights, dtype=torch.float32)
         self._sim_env = TetrisEnv() # A private, stateless helper
@@ -330,6 +330,7 @@ class ProHeuristic:
     ) -> torch.Tensor:
         """Scores moves using a two-step lookahead."""
         scores = []
+        cleared_counts = []
         
         for rot, x in moves:
             # 1. Simulate placing the CURRENT piece
@@ -353,6 +354,7 @@ class ProHeuristic:
             # 2. Check for line clears from this move
             full_rows = np.all(sim_board, axis=1)
             lines_cleared_this_step = int(np.sum(full_rows))
+            cleared_counts.append(lines_cleared_this_step)
             if lines_cleared_this_step > 0:
                 post_clear_board = np.zeros_like(sim_board)
                 new_row_idx = BOARD_HEIGHT - 1
@@ -445,8 +447,13 @@ class ProHeuristic:
             # Discount the future score slightly to prioritize the current move's quality
             final_score = immediate_score + 0.5 * best_next_score
             scores.append(final_score)
+        scores = torch.tensor(scores, dtype=torch.float32)
+        cleared_counts = torch.tensor(cleared_counts, dtype=torch.int)
 
-        return torch.tensor(scores, dtype=torch.float32)
+        max_clear = int(cleared_counts.max().item())
+        if max_clear > 0:
+            scores[cleared_counts < max_clear] -= 1e6
+        return scores
     
 # --- Model ---
 class SEBlock(nn.Module):
