@@ -451,7 +451,7 @@ class GFNNet(nn.Module):
     def __init__(self,
                  block=ResidualBlock,
                  num_blocks=[2,2,2,2],
-                 base_channels=64,
+                 base_channels=32,
                  n_pieces=N_PIECES):
         super().__init__()
         self.in_ch = base_channels
@@ -465,11 +465,12 @@ class GFNNet(nn.Module):
         self.layer4 = self._make_layer(block, base_channels*8,   num_blocks[3], stride=2)
 
         self.avgpool = nn.AdaptiveAvgPool2d((1,1))
+        fc_dim = base_channels * 8
         self.fc = nn.Sequential(
-            nn.Linear(base_channels*8 * block.expansion + 2*n_pieces, 512),
+            nn.Linear(base_channels*8 * block.expansion + 2*n_pieces, fc_dim),
             nn.ReLU(True),
             nn.Dropout(0.5),
-            nn.Linear(512, 4 * BOARD_WIDTH) # 4 rotations, 10 positions
+            nn.Linear(fc_dim, 4 * BOARD_WIDTH) # 4 rotations, 10 positions
         )
 
     def _make_layer(self, block, out_ch, blocks, stride):
@@ -494,9 +495,9 @@ class GFNNet(nn.Module):
 
 class TetrisFlowNet(nn.Module):
     """Wraps GFNNet and adds the per-piece logZ parameters for GFlowNet."""
-    def __init__(self, n_pieces: int = N_PIECES):
+    def __init__(self, n_pieces: int = N_PIECES, base_channels: int = 32):
         super().__init__()
-        self.model = GFNNet(n_pieces=n_pieces)
+        self.model = GFNNet(n_pieces=n_pieces, base_channels=base_channels)
         self.logZ = nn.Parameter(torch.zeros(n_pieces))
 
     def forward(self, board, cur_piece_id, nxt_piece_id):
@@ -706,6 +707,8 @@ def main():
     parser.add_argument('--seed', type=int, default=int(time.time()), help="Random seed.")
     parser.add_argument('--max-steps', type=int, default=0, help="Maximum placements per episode (focus on early game).")
     parser.add_argument('--use-fixed-seq', action='store_true', help="Train on the same piece order as the JS demo.")
+    parser.add_argument('--base-channels', type=int, default=32,
+                        help='Base channel count for the neural net (lower for a smaller model).')
     parser.add_argument('--minimal-checkpoint', action='store_true',
                         help='Save a smaller checkpoint by omitting optimizer state and using dynamic quantization.')
     args = parser.parse_args()
@@ -723,7 +726,7 @@ def main():
     heuristic = ProHeuristic()
     heuristic.weights = heuristic.weights.to(device)
 
-    model = TetrisFlowNet().to(device)
+    model = TetrisFlowNet(base_channels=args.base_channels).to(device)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.lr_decay_step, gamma=args.lr_decay_gamma)
     imitation_loss_fn = nn.CrossEntropyLoss()
