@@ -167,11 +167,20 @@ function hexToRgb(hex) {
   };
 }
 
+// Compact string representation of a board for hashing/deduplication
+function boardToKey(board) {
+  return board.map(row => row.join("")).join("|");
+}
+
 // -----------------------------------------------------------------------------
 // Heuristic Scoring (inspired by ProHeuristic in imp.py)
 // -----------------------------------------------------------------------------
 const HEURISTIC_WEIGHTS = [-4.5, -7.9, -3.4, -3.2, -3.1, -3.3, 4.5];
-const HEURISTIC_MIX = 0.05; // weight for heuristic when combining with log flows
+// Weight for heuristic when combining with log flows.  The model shipped with
+// the demo is very weak so we rely much more on the heuristic.
+const HEURISTIC_MIX    = 0.5;
+// Extra weight applied to the lookahead score when evaluating a move.
+const LOOKAHEAD_FACTOR = 0.5;
 
 function computeBoardFeatures(board) {
   const heights = new Array(COLS).fill(0);
@@ -257,6 +266,82 @@ function heuristicScoreCandidate(board, cand) {
     }
   }
   return heuristicForBoard(newBoard, linesCleared);
+}
+
+// --- Helper functions for lookahead scoring ---
+function boardCollides(board, shape, x, y) {
+  for (let r = 0; r < shape.length; r++) {
+    for (let c = 0; c < shape[r].length; c++) {
+      if (!shape[r][c]) continue;
+      const xx = x + c;
+      const yy = y + r;
+      if (xx < 0 || xx >= COLS || yy >= ROWS) return true;
+      if (yy >= 0 && board[yy][xx]) return true;
+    }
+  }
+  return false;
+}
+
+function dropPieceOnBoard(board, shape, x) {
+  if (boardCollides(board, shape, x, 0)) return null;
+  let y = 0;
+  while (!boardCollides(board, shape, x, y + 1)) {
+    y += 1;
+  }
+  return y;
+}
+
+function applyPieceToBoard(board, piece) {
+  const newBoard = board.map(row => row.slice());
+  for (let r = 0; r < piece.shape.length; r++) {
+    for (let c = 0; c < piece.shape[r].length; c++) {
+      if (piece.shape[r][c]) newBoard[piece.y + r][piece.x + c] = 1;
+    }
+  }
+  let linesCleared = 0;
+  for (let r = ROWS - 1; r >= 0; r--) {
+    if (newBoard[r].every(v => v)) {
+      newBoard.splice(r, 1);
+      newBoard.unshift(new Array(COLS).fill(0));
+      linesCleared++;
+    }
+  }
+  return { board: newBoard, linesCleared };
+}
+
+function getPlacementsForPiece(board, pieceType) {
+  const rotations = (pieceType === 'O') ? [0] : [0, 1, 2, 3];
+  const placements = [];
+  for (let rot of rotations) {
+    let shape = deepCopy(TETROMINOES[pieceType]);
+    for (let i = 0; i < rot; i++) shape = rotateMatrix(shape);
+    const w = shape[0].length;
+    for (let x = 0; x <= COLS - w; x++) {
+      const y = dropPieceOnBoard(board, shape, x);
+      if (y === null) continue;
+      placements.push({ shape: deepCopy(shape), x, y });
+    }
+  }
+  return placements;
+}
+
+function heuristicScoreLookahead(board, cand, nextType) {
+  const after = applyPieceToBoard(board, cand.piece);
+  let bestNext = -Infinity;
+  if (nextType) {
+    const nextMoves = getPlacementsForPiece(after.board, nextType);
+    if (nextMoves.length === 0) {
+      bestNext = -1e6;
+    } else {
+      for (let mv of nextMoves) {
+        const nb = applyPieceToBoard(after.board, mv);
+        const sc = heuristicForBoard(nb.board, nb.linesCleared);
+        if (sc > bestNext) bestNext = sc;
+      }
+    }
+  }
+  const immediate = heuristicForBoard(after.board, after.linesCleared);
+  return immediate + LOOKAHEAD_FACTOR * bestNext;
 }
 
 
@@ -910,8 +995,13 @@ async function getCandidateMoves() {
   // compute probabilities
   let sumFlow = 0;
   for (let c of cands) {
-    const f = Math.exp(flowsForState[c.action_key] || 0);
-    c.flow = f;
+    const logf = flowsForState[c.action_key] ?? -Infinity;
+    const f = Math.exp(logf);
+    const after = applyPieceToBoard(game.board, c.piece);
+    c.board_key = boardToKey(after.board);
+    c.flow  = f;
+    c.score = logf + HEURISTIC_MIX *
+      heuristicScoreLookahead(game.board, c, game.next_piece_type);
     sumFlow += f;
   }
   for (let c of cands) {
@@ -970,14 +1060,15 @@ function selectMove(actionKey = null) {
   if (actionKey !== null) {
     selected = cands.find(c => c.action_key === actionKey);
   } else {
-    let bestFlow = -Infinity;
+    let bestScore = -Infinity;
     for (let c of cands) {
-      const f = Math.exp(flows[c.action_key]);
-      if (f > bestFlow + 1e-12) {
-        bestFlow = f;
+      const logf = flows[c.action_key] ?? -Infinity;
+      const score = logf + HEURISTIC_MIX *
+        heuristicScoreLookahead(game.board, c, game.next_piece_type);
+      if (score > bestScore) {
+        bestScore = score;
         selected = c;
       }
-      // ties will keep the earlier (lower action_key) one
     }
   }
 
@@ -1088,8 +1179,10 @@ async function selectMove(actionKey = null) {
     agent.log_flows[state_key] = flows;  // cache for future moves
   }
 
-  // Compute heuristic scores for each candidate
-  const heuristics = cands.map(c => heuristicScoreCandidate(game.board, c));
+  // Compute heuristic scores (with lookahead) for each candidate
+  const heuristics = cands.map(c =>
+    heuristicScoreLookahead(game.board, c, game.next_piece_type)
+  );
 
   // 5) Pick the move
   let selected = null;
@@ -1323,53 +1416,6 @@ function drawEffects() {
 // -----------------------------------------------------------------------------
 // 3) draw — always paints grid → board → piece → arrows → effects
 // -----------------------------------------------------------------------------
-function draw() {
-  // clear & background
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  ctx.fillStyle = "#222";
-  ctx.fillRect(0,0,canvas.width,canvas.height);
-
-  // 1) grid lines
-  ctx.strokeStyle = "rgba(255,255,255,0.1)";
-  for (let x = 0; x <= COLS; x++) {
-    ctx.beginPath();
-    ctx.moveTo(x*CELL_SIZE, 0);
-    ctx.lineTo(x*CELL_SIZE, ROWS*CELL_SIZE);
-    ctx.stroke();
-  }
-  for (let y = 0; y <= ROWS; y++) {
-    ctx.beginPath();
-    ctx.moveTo(0, y*CELL_SIZE);
-    ctx.lineTo(COLS*CELL_SIZE, y*CELL_SIZE);
-    ctx.stroke();
-  }
-
-  // 2) locked blocks
-  if (currentGameState && currentGameState.board) {
-    for (let r=0; r<ROWS; r++) {
-      for (let c=0; c<COLS; c++) {
-        if (currentGameState.board[r][c]) {
-          ctx.fillStyle="#666";
-          ctx.fillRect(c*CELL_SIZE, r*CELL_SIZE, CELL_SIZE, CELL_SIZE);
-          ctx.strokeStyle="#444";
-          ctx.strokeRect(c*CELL_SIZE, r*CELL_SIZE, CELL_SIZE, CELL_SIZE);
-        }
-      }
-    }
-  }
-
-  // 3) falling piece
-  drawCurrentPiece(currentGameState);
-
-  // 4) top-3 arrows & shadows
-  topCandidates.forEach(c=>{
-    new Arrow(currentPieceCenter, c.piece_center, c.flow, c.color).draw(ctx);
-    drawCandidateShadow(c.piece, c.color);
-  });
-
-  // 5) particles / lingering effects
-  drawEffects();
-}
 
 function animate() {
   const now = performance.now();
@@ -1403,58 +1449,6 @@ function animate() {
 
   draw();
   requestAnimationFrame(animate);
-}
-// ----------------------------------------------------------------------------
-// 1) fetchCandidateMoves — snap & draw immediately, then score in the background
-// ----------------------------------------------------------------------------
-// -----------------------------------------------------------------------------
-// 1) fetchCandidateMoves — snapshot + full draw BEFORE async scoring
-// -----------------------------------------------------------------------------
-async function fetchCandidateMoves() {
-  if (simulationPaused) return;
-
-  // show loader
-  candidateListEl.innerHTML = `<div class="loading">computing…</div>`;
-
-  // a) snapshot state
-  currentGameState = {
-    board:         game.board,
-    current_piece: game.current_piece,
-    score:         game.score,
-    game_over:     game.game_over,
-    piece_id:      game.piece_id
-  };
-  currentPieceCenter = game.get_piece_center();
-
-  // b) clear previous visuals
-  appliedArrows = [];
-  topCandidates = [];
-
-  // c) IMMEDIATELY redraw EVERYTHING
-  draw();
-
-  // d) now do heavy scoring in background
-  try {
-    const data = await getCandidateMoves();
-    currentGameState   = data.game_state;
-    currentPieceCenter = data.current_piece_center;
-    candidateMoves     = data.terminal_moves;
-
-    // sort & pick top-3
-    candidateMoves.sort((a,b)=> b.flow - a.flow);
-    topCandidates = candidateMoves.slice(0,3);
-    assignCandidateColors(topCandidates);
-
-    updateCandidateListUI();
-
-    // autopilot: play the green (top) move if the user hasn't clicked yet
-    if (!inputPaused && topCandidates.length) {
-      autoPlayCandidate(topCandidates[0].action_key);
-    }
-  } catch(err) {
-    console.error("Error scoring:", err);
-    candidateListEl.innerHTML = `<div class="error">failed</div>`;
-  }
 }
 
 // ----------------------------------------------------------------------------
@@ -1587,6 +1581,9 @@ function gameTick() {
   }
 }
 
+// -----------------------------------------------------------------------------
+// fetchCandidateMoves — snapshot + full draw BEFORE async scoring
+// -----------------------------------------------------------------------------
 async function fetchCandidateMoves() {
   if (simulationPaused) return;    // don’t overlap scoring
 
@@ -1604,8 +1601,17 @@ async function fetchCandidateMoves() {
     currentGameState   = data.game_state;
     currentPieceCenter = data.current_piece_center;
     candidateMoves     = data.terminal_moves;
-    candidateMoves.sort((a,b)=> b.flow - a.flow);
-    topCandidates = candidateMoves.slice(0,3);
+    candidateMoves.sort((a,b)=> b.score - a.score);
+    const unique = [];
+    const seen = new Set();
+    for (let cand of candidateMoves) {
+      if (!seen.has(cand.board_key)) {
+        seen.add(cand.board_key);
+        unique.push(cand);
+        if (unique.length === 3) break;
+      }
+    }
+    topCandidates = unique;
     assignCandidateColors(topCandidates);
     updateCandidateListUI();
     if (!inputPaused && topCandidates.length) {
