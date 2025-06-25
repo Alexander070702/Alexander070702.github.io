@@ -65,16 +65,22 @@ PIECE_IDS = {name: i for i, name in enumerate(TETROMINOES.keys())}
 N_PIECES = len(TETROMINOES)
 
 # --- Environment ---
+BASE_SEQUENCE = ["I", "O", "T", "S", "Z", "J", "L"]
+PREDEFINED_PIECES = [BASE_SEQUENCE[i % len(BASE_SEQUENCE)] for i in range(1000)]
+
+
 class TetrisEnv:
     """A NumPy-based Tetris environment compatible with the GFlowNet agent."""
-    def __init__(self, seed: Optional[int] = None):
+    def __init__(self, seed: Optional[int] = None, fixed_sequence: Optional[List[str]] = None):
         if seed is not None:
             np.random.seed(seed)
-            random.seed(seed) # Also seed python's random for bag shuffling
+            random.seed(seed)  # Also seed python's random for bag shuffling
         self.board: Optional[np.ndarray] = None
         self.bag: List[str] = []
         self.next_piece_in_bag: Optional[str] = None
         self.current_piece: Optional[Dict] = None
+        self.fixed_sequence = fixed_sequence
+        self.seq_idx = 0
         self.score: int = 0
         self.lines_cleared: int = 0
         self.game_over: bool = False
@@ -87,28 +93,44 @@ class TetrisEnv:
         self.lines_cleared = 0
         self.game_over = False
         self.bag = []
+        self.seq_idx = 0
         self._fill_bag()
-        self._fill_bag() # Fill twice for lookahead
+        self._fill_bag()  # Fill twice for lookahead
         self.current_piece = self._spawn_piece()
-        self.next_piece_in_bag = self.bag[0]
+        if self.fixed_sequence is not None:
+            self.next_piece_in_bag = self.fixed_sequence[self.seq_idx % len(self.fixed_sequence)]
+        else:
+            self.next_piece_in_bag = self.bag[0]
         if self._collides(self.current_piece['shape'], (self.current_piece['x'], self.current_piece['y'])):
             self.game_over = True
         return self.get_state()
 
     def _fill_bag(self):
-        """Refills the piece bag with a shuffled set of all tetrominoes."""
-        new_pieces = list(TETROMINOES.keys())
-        random.shuffle(new_pieces)
-        self.bag.extend(new_pieces)
+        """Refills the piece bag."""
+        if self.fixed_sequence is not None:
+            while len(self.bag) < N_PIECES + 1:
+                if self.seq_idx >= len(self.fixed_sequence):
+                    self.seq_idx = 0
+                self.bag.append(self.fixed_sequence[self.seq_idx])
+                self.seq_idx += 1
+        else:
+            new_pieces = list(TETROMINOES.keys())
+            random.shuffle(new_pieces)
+            self.bag.extend(new_pieces)
 
     def _spawn_piece(self) -> Dict:
-        """Spawns a new piece from the bag."""
-        if len(self.bag) < N_PIECES + 1: # Ensure lookahead is always possible
-            self._fill_bag()
-        piece_type = self.bag.pop(0)
+        """Spawns a new piece."""
+        if self.fixed_sequence is not None:
+            if len(self.bag) < 1:
+                self._fill_bag()
+            piece_type = self.bag.pop(0)
+        else:
+            if len(self.bag) < N_PIECES + 1:  # Ensure lookahead is always possible
+                self._fill_bag()
+            piece_type = self.bag.pop(0)
         shape = TETROMINOES[piece_type]
         x = (BOARD_WIDTH - shape.shape[1]) // 2
-        y = 0 # Start at the top
+        y = 0  # Start at the top
         return {'type': piece_type, 'shape': shape, 'x': x, 'y': y, 'rot': 0}
 
     def get_state(self) -> Dict:
@@ -190,7 +212,7 @@ class TetrisEnv:
 
         # Spawn next piece
         self.current_piece = self._spawn_piece()
-        self.next_piece_in_bag = self.bag[0]
+        self.next_piece_in_bag = self.bag[0] if self.bag else None
 
         # Check for game over (if new piece spawns in a collision)
         if self._collides(self.current_piece['shape'], (self.current_piece['x'], self.current_piece['y'])):
@@ -489,7 +511,7 @@ def get_current_alpha(step, args):
         return args.alpha_end
     return args.alpha_start + (args.alpha_end - args.alpha_start) * (step / args.alpha_anneal_steps)
 
-def run_episode(env, model, heuristic, alpha, device, is_imitation: bool):
+def run_episode(env, model, heuristic, alpha, device, is_imitation: bool, max_steps: int = 0):
     """
     Runs a single episode of Tetris.
     - If `is_imitation`, it follows the heuristic greedily and stores data for supervised learning.
@@ -498,6 +520,7 @@ def run_episode(env, model, heuristic, alpha, device, is_imitation: bool):
     state = env.reset()
     game_over = env.game_over
     trajectory = []
+    steps = 0
     
     while not game_over:
         current_board = state['board']
@@ -566,7 +589,11 @@ def run_episode(env, model, heuristic, alpha, device, is_imitation: bool):
             })
 
         state, _, game_over = env.step(action)
-    
+        steps += 1
+        if max_steps and steps >= max_steps:
+            game_over = True
+            env.game_over = True
+
     return trajectory, env.score
 
 def train_step(optimizer, model, batch_data, is_imitation, imitation_loss_fn, device):
@@ -676,6 +703,8 @@ def main():
     parser.add_argument('--onnx-path', type=str, default='gfn_tetris_pro.onnx', help="Path to export ONNX model.")
     parser.add_argument('--log-dir', type=str, default='runs/tetris_pro_gfn', help="TensorBoard log directory.")
     parser.add_argument('--seed', type=int, default=int(time.time()), help="Random seed.")
+    parser.add_argument('--max-steps', type=int, default=0, help="Maximum placements per episode (focus on early game).")
+    parser.add_argument('--use-fixed-seq', action='store_true', help="Train on the same piece order as the JS demo.")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -686,7 +715,8 @@ def main():
     print(f"Using device: {device}")
 
     writer = SummaryWriter(args.log_dir)
-    env = TetrisEnv(seed=args.seed)
+    fixed_seq = PREDEFINED_PIECES if args.use_fixed_seq else None
+    env = TetrisEnv(seed=args.seed, fixed_sequence=fixed_seq)
     heuristic = ProHeuristic()
     heuristic.weights = heuristic.weights.to(device)
 
@@ -704,7 +734,9 @@ def main():
         is_imitation = ep <= args.imitation_epochs
         alpha = 0.0 if is_imitation else get_current_alpha(total_steps, args)
         
-        trajectory, final_score = run_episode(env, model, heuristic, alpha, device, is_imitation)
+        trajectory, final_score = run_episode(
+            env, model, heuristic, alpha, device, is_imitation, args.max_steps
+        )
         
         if trajectory: # Only add episodes that had at least one move
             batch_buffer.append({'trajectory': trajectory, 'score': final_score})
