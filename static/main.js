@@ -574,11 +574,23 @@ lock_piece() {
     const candidates = [];
     const rotations = (orig.type === "O") ? [0] : [0,1,2,3];
 
+    // Track unique orientations so we don't generate duplicate states
+    const seenShapes = new Set();
+    const uniqueRotations = [];
     for (let rot of rotations) {
       let shape = deepCopy(base_shape);
       for (let i = 0; i < rot; i++) {
         shape = rotateMatrix(shape);
       }
+      const shapeKey = JSON.stringify(shape);
+      if (!seenShapes.has(shapeKey)) {
+        seenShapes.add(shapeKey);
+        uniqueRotations.push({ rot, shape, shapeKey });
+      }
+    }
+
+    const seenPositions = new Set();
+    for (let { rot, shape, shapeKey } of uniqueRotations) {
       const h = shape.length;
       const w = shape[0].length;
       for (let x = 0; x <= this.cols - w; x++) {
@@ -600,6 +612,13 @@ lock_piece() {
         if (testPiece.y < 0) {
           continue;
         }
+        const posKey = `${shapeKey}_x${x}_y${testPiece.y}`;
+        if (seenPositions.has(posKey)) {
+          // Same terminal state already considered
+          continue;
+        }
+        seenPositions.add(posKey);
+
         const center = this.get_piece_center(testPiece);
         const action_key = `r${rot}_x${x}`;
         candidates.push({
