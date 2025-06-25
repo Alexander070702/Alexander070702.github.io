@@ -451,6 +451,10 @@ class ProHeuristic:
                         + lookahead_bonus
                         + 0.7 * best_third_score
                     )
+                            if score2 > best_third_score:
+                                best_third_score = score2
+
+                    score1 = self.score_state(cleared_board, lines_after_next) + 0.6 * best_third_score
                     if score1 > best_next_score:
                         best_next_score = score1
             
@@ -459,6 +463,8 @@ class ProHeuristic:
             immediate_score = self.score_state(post_clear_board, lines_cleared_this_step)
             # Discount the future score slightly to prioritize the current move's quality
             final_score = immediate_score + 0.6 * best_next_score
+
+            final_score = immediate_score + 0.5 * best_next_score
             scores.append(final_score)
 
         return torch.tensor(scores, dtype=torch.float32)
