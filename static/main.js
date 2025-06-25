@@ -60,6 +60,7 @@ let canvas = null;
 let ctx = null;
 let candidateListEl = null;
 let resetBtn = null;
+let pauseBtn = null;
 
 // We'll keep track of game state & candidate moves in these globals
 let currentGameState = null;
@@ -1492,6 +1493,11 @@ function draw() {
 }
 
 function animate() {
+  if (simulationPaused) {
+    draw();
+    requestAnimationFrame(animate);
+    return;
+  }
   const now = performance.now();
   const dt = (now - lastTime) / 1000;
   lastTime = now;
@@ -1694,6 +1700,7 @@ async function autoPlayCandidate(actionKey) {
 // 2) gameTick — advance logic, THEN redraw instantly, THEN kick off fetch
 // -----------------------------------------------------------------------------
 function gameTick() {
+  if (simulationPaused) return;
   // 1) advance logic & draw every time
   const data = tickGameLogic();
   currentGameState   = data.game_state;
@@ -1754,6 +1761,13 @@ function doResetGame() {
 
   candidateListEl.innerHTML = "";
   fetchCandidateMoves();
+}
+
+function doTogglePause() {
+  simulationPaused = !simulationPaused;
+  if (pauseBtn) {
+    pauseBtn.textContent = simulationPaused ? "Resume Game" : "Pause Game";
+  }
 }
 
 function updateCandidateListUI() {
@@ -1830,6 +1844,7 @@ async function init() {
   ctx             = canvas.getContext("2d");
   candidateListEl = document.getElementById("candidateList");
   resetBtn        = document.getElementById("resetBtn");
+  pauseBtn        = document.getElementById("pauseBtn");
 
   // 2) Game & agent
   game  = new TetrisGame();
@@ -1862,6 +1877,7 @@ async function init() {
 
   // 6) Reset‐button & optional pretrained flows
   resetBtn.addEventListener("click", doResetGame);
+  pauseBtn.addEventListener("click", doTogglePause);
     res => res.json()
     .then(data => agent.loadFromJSON(data))
     .catch(()=>{/* ignore if none */});
