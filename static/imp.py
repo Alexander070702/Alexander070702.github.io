@@ -47,6 +47,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+import torch.quantization
 from torch.utils.tensorboard import SummaryWriter
 
 # --- Constants and Configuration ---
@@ -450,7 +451,7 @@ class GFNNet(nn.Module):
     def __init__(self,
                  block=ResidualBlock,
                  num_blocks=[2,2,2,2],
-                 base_channels=64,
+                 base_channels=32,
                  n_pieces=N_PIECES):
         super().__init__()
         self.in_ch = base_channels
@@ -464,11 +465,12 @@ class GFNNet(nn.Module):
         self.layer4 = self._make_layer(block, base_channels*8,   num_blocks[3], stride=2)
 
         self.avgpool = nn.AdaptiveAvgPool2d((1,1))
+        fc_dim = base_channels * 8
         self.fc = nn.Sequential(
-            nn.Linear(base_channels*8 * block.expansion + 2*n_pieces, 512),
+            nn.Linear(base_channels*8 * block.expansion + 2*n_pieces, fc_dim),
             nn.ReLU(True),
             nn.Dropout(0.5),
-            nn.Linear(512, 4 * BOARD_WIDTH) # 4 rotations, 10 positions
+            nn.Linear(fc_dim, 4 * BOARD_WIDTH) # 4 rotations, 10 positions
         )
 
     def _make_layer(self, block, out_ch, blocks, stride):
@@ -493,9 +495,9 @@ class GFNNet(nn.Module):
 
 class TetrisFlowNet(nn.Module):
     """Wraps GFNNet and adds the per-piece logZ parameters for GFlowNet."""
-    def __init__(self, n_pieces: int = N_PIECES):
+    def __init__(self, n_pieces: int = N_PIECES, base_channels: int = 32):
         super().__init__()
-        self.model = GFNNet(n_pieces=n_pieces)
+        self.model = GFNNet(n_pieces=n_pieces, base_channels=base_channels)
         self.logZ = nn.Parameter(torch.zeros(n_pieces))
 
     def forward(self, board, cur_piece_id, nxt_piece_id):
@@ -705,6 +707,10 @@ def main():
     parser.add_argument('--seed', type=int, default=int(time.time()), help="Random seed.")
     parser.add_argument('--max-steps', type=int, default=0, help="Maximum placements per episode (focus on early game).")
     parser.add_argument('--use-fixed-seq', action='store_true', help="Train on the same piece order as the JS demo.")
+    parser.add_argument('--base-channels', type=int, default=32,
+                        help='Base channel count for the neural net (lower for a smaller model).')
+    parser.add_argument('--minimal-checkpoint', action='store_true',
+                        help='Save a smaller checkpoint by omitting optimizer state and using dynamic quantization.')
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -720,7 +726,7 @@ def main():
     heuristic = ProHeuristic()
     heuristic.weights = heuristic.weights.to(device)
 
-    model = TetrisFlowNet().to(device)
+    model = TetrisFlowNet(base_channels=args.base_channels).to(device)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.lr_decay_step, gamma=args.lr_decay_gamma)
     imitation_loss_fn = nn.CrossEntropyLoss()
@@ -728,10 +734,14 @@ def main():
     episode_scores = deque(maxlen=100)
     total_steps = 0
     batch_buffer = []
+    prev_is_imitation = True
 
     print("Starting training…")
     for ep in range(1, args.episodes + 1):
         is_imitation = ep <= args.imitation_epochs
+        if is_imitation != prev_is_imitation:
+            batch_buffer = []
+            prev_is_imitation = is_imitation
         alpha = 0.0 if is_imitation else get_current_alpha(total_steps, args)
         
         trajectory, final_score = run_episode(
@@ -771,14 +781,25 @@ def main():
     # --- Save and Export ---
     print("Training finished. Saving model...")
     Path(args.checkpoint_path).parent.mkdir(exist_ok=True, parents=True)
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'args': args,
-    }, args.checkpoint_path)
-    print(f"✅ Saved checkpoint: {args.checkpoint_path}")
+    if args.minimal_checkpoint:
+        print("Saving minimal checkpoint with dynamic quantization…")
+        quantized_model = torch.quantization.quantize_dynamic(
+            model, {nn.Linear}, dtype=torch.qint8
+        )
+        torch.save({'model_state_dict': quantized_model.state_dict()}, args.checkpoint_path)
+    else:
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'args': args,
+        }, args.checkpoint_path)
+    size_mb = Path(args.checkpoint_path).stat().st_size / (1024 * 1024)
+    print(f"✅ Saved checkpoint: {args.checkpoint_path} ({size_mb:.2f} MB)")
 
     model.eval()
+    export_model = model
+    if args.minimal_checkpoint:
+        export_model = torch.quantization.quantize_dynamic(model, {nn.Linear}, dtype=torch.qint8)
     dummy_board = torch.randn(1, BOARD_HEIGHT, BOARD_WIDTH, device=device)
     dummy_cur_id = torch.tensor([0], dtype=torch.long, device=device)
     dummy_nxt_id = torch.tensor([1], dtype=torch.long, device=device)
@@ -788,7 +809,7 @@ def main():
     Path(args.onnx_path).parent.mkdir(exist_ok=True, parents=True)
     try:
         torch.onnx.export(
-            model.model,
+            export_model.model,
             (dummy_board, dummy_cur_oh, dummy_nxt_oh),
             args.onnx_path,
             export_params=True,
@@ -802,7 +823,8 @@ def main():
                 'logits': {0:'batch'},
             }
         )
-        print(f"✅ Exported ONNX model: {args.onnx_path}")
+        size_mb = Path(args.onnx_path).stat().st_size / (1024 * 1024)
+        print(f"✅ Exported ONNX model: {args.onnx_path} ({size_mb:.2f} MB)")
     except Exception as e:
         print(f"❌ Failed to export ONNX model: {e}")
 
