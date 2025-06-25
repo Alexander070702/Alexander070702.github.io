@@ -42,11 +42,13 @@ async function loadGFlowNetModel() {
 // CONSTANTS & GLOBALS
 //-----------------------------------------------------------------------------
 
-const CELL_SIZE = 30;       // each cell is 30px
-const COLS = 10;            // standard Tetris columns
-const ROWS = 20;            // standard Tetris rows
-const TICK_INTERVAL = 700;  // falling speed (ms)
-const MOVE_PAUSE_DURATION = 2000; // pause after a move is selected (ms)
+const CELL_SIZE = 30;
+const COLS      = 6;
+const ROWS      = 20;
+const TICK_INTERVAL       = 700;
+const MOVE_PAUSE_DURATION = 2000;
+
+
 
 // We'll store the game logic objects in global variables for convenience
 let game = null;
@@ -121,6 +123,7 @@ function getNextPiece() {
   nextIdx = (nextIdx + 1) % BASE.length;
   return p;
 }
+const N_PIECES = BASE.length;   // 7
 
 const PREDEFINED_PIECES = Array.from({length:1000}, () => getNextPiece());
 //-----------------------------------------------------------------------------
@@ -168,12 +171,13 @@ class TetrisGame {
   /**
    * constructor: Create a TetrisGame with default COLS/ROWS if none provided.
    */
-  constructor(cols = COLS, rows = ROWS) {
+constructor(cols = COLS, rows = ROWS) {
     this.cols = cols;
     this.rows = rows;
-    this.piece_id = 0;  // increments every time we spawn a new piece
+    this.piece_id = 0;
+    this.next_piece_type = null; // <-- ADD THIS LINE
     this.reset_game();
-  }
+}
 
   /**
    * reset_game: Clear the board, reset score, spawn a new piece, etc.
@@ -195,30 +199,32 @@ class TetrisGame {
   /**
    * spawn_piece: Randomly choose a Tetromino type, set its shape, position, etc.
    */
- spawn_piece() {
-  this.piece_id += 1;
+// In class TetrisGame, replace the existing spawn_piece method
+spawn_piece() {
+    this.piece_id += 1;
 
-  // Determine index into your predefined list (wrap if you exceed its length)
-  const idx = (this.piece_id - 1) % PREDEFINED_PIECES.length;
-  const t_type = PREDEFINED_PIECES[idx];
+    // Determine index for current and next pieces
+    const current_idx = (this.piece_id - 1) % PREDEFINED_PIECES.length;
+    const next_idx = this.piece_id % PREDEFINED_PIECES.length;
 
-  // Build the piece
-  const shape = deepCopy(TETROMINOES[t_type]);
-  const piece = {
-    type: t_type,
-    shape: shape,
-    x: Math.floor((this.cols - shape[0].length) / 2),
-    y: 1
-  };
+    const t_type = PREDEFINED_PIECES[current_idx];
+    this.next_piece_type = PREDEFINED_PIECES[next_idx]; // <-- SET THE NEXT PIECE
 
-  // If it collides immediately, game over
-  if (this.collides(piece)) {
-    this.game_over = true;
-  }
+    // Build the piece (rest of the function is the same)
+    const shape = deepCopy(TETROMINOES[t_type]);
+    const piece = {
+        type: t_type,
+        shape: shape,
+        x: Math.floor((this.cols - shape[0].length) / 2),
+        y: 1
+    };
 
-  return piece;
+    if (this.collides(piece)) {
+        this.game_over = true;
+    }
+
+    return piece;
 }
-
   /**
    * collides: Check if a piece is out of bounds or overlaps existing blocks.
    */
@@ -912,15 +918,15 @@ function selectMove(actionKey = null) {
  * computeFlowsForState: Run the ONNX model once (throttled), return
  *                      a map { action_key → log-flow }.
  */
+// In your main.js file, replace the existing function
 async function computeFlowsForState(game) {
-  // 1) If a score is already in progress, bail out immediately.
-  if (scoringInProgress) {
-    return {};
+  if (scoringInProgress || !ortSession) {
+    return {};  // either already running or model not ready
   }
   scoringInProgress = true;
 
   try {
-    // — Build the input tensors exactly as before —
+    // --- Board tensor ---
     const flatBoard = game.board.flat();
     const boardTensor = new ort.Tensor(
       "float32",
@@ -928,40 +934,40 @@ async function computeFlowsForState(game) {
       [1, ROWS, COLS]
     );
 
-    const oneHot = new Float32Array(7).fill(0);
-    oneHot['IOTSZJL'.indexOf(game.current_piece.type)] = 1;
-    const pieceTensor = new ort.Tensor(
-      "float32",
-      oneHot,
-      [1, 7]
-    );
+    // --- CURRENT one-hot ---
+    const curOH = new Float32Array(N_PIECES).fill(0);
+    curOH['IOTSZJL'.indexOf(game.current_piece.type)] = 1;
+    const curTensor = new ort.Tensor("float32", curOH, [1, N_PIECES]);
 
+    // --- NEXT one-hot ---
+    const nextOH = new Float32Array(N_PIECES).fill(0);
+    if (game.next_piece_type) {
+      nextOH['IOTSZJL'.indexOf(game.next_piece_type)] = 1;
+    }
+    const nextTensor = new ort.Tensor("float32", nextOH, [1, N_PIECES]);
+
+    // --- **FIXED** feed keys to match your ONNX's input_names ---
     const feeds = {
-      board: boardTensor,
-      piece_onehot: pieceTensor
+      'board':       boardTensor,
+      'cur_onehot':  curTensor,
+      'nxt_onehot':  nextTensor
     };
 
-    // 2) Run the ONNX session (await so we don’t overlap calls)
+    // --- Run inference ---
     const results = await ortSession.run(feeds);
+    const logFdata = results.logits.data; 
 
-    // 3) ***Use the correct output name*** ("logits"), not "logF"
-    const logFdata = results.logits.data;  
-
-    // 4) Map each terminal move back to its log-flow
+    // Map back into your action_key → log-flow
     const flows = {};
     for (let c of game.get_terminal_moves()) {
-      // action_key is of the form "r{rot}_x{x}"
       const [r, x] = c.action_key.slice(1).split('_x').map(Number);
       flows[c.action_key] = logFdata[r * COLS + x];
     }
     return flows;
-
   } finally {
-    // 5) Clear the in-flight flag so future calls can proceed
     scoringInProgress = false;
   }
 }
-
 
 async function selectMove(actionKey = null) {
   // 1) If the game is already over, bail early
@@ -1600,27 +1606,18 @@ function updateCandidateListUI() {
 }
 
 
-//-----------------------------------------------------------------------------
-// INIT FUNCTION - sets up canvas, UI references, event handlers, etc.
-//-----------------------------------------------------------------------------
 async function init() {
-  // ── 1) Canvas & UI references ─────────────────────────────────────────────
+  // 1) Canvas & UI refs
   canvas          = document.getElementById("tetrisCanvas");
   ctx             = canvas.getContext("2d");
   candidateListEl = document.getElementById("candidateList");
   resetBtn        = document.getElementById("resetBtn");
 
-  // Paint background (Viridis) if you have that
-  const bgCanvas  = document.getElementById("tetrisBgCanvas");
-  const bgCtx     = bgCanvas.getContext("2d");
-  bgCtx.fillStyle = "#39568C";
-  bgCtx.fillRect(0, 0, bgCanvas.width, bgCanvas.height);
-
-  // 2) make your game & agent
+  // 2) Game & agent
   game  = new TetrisGame();
   agent = new TrajectoryBalanceAgent(0.02);
 
-  // 3) do an immediate “first draw” of the empty board + first piece
+  // 3) First draw
   currentGameState   = {
     board:         game.board,
     current_piece: game.current_piece,
@@ -1629,31 +1626,28 @@ async function init() {
     piece_id:      game.piece_id
   };
   currentPieceCenter = game.get_piece_center();
-  draw();   // ← you’ll instantly see the first piece
+  draw();
 
-  // 4) start your loops
+  // 4) Start logic/tick loops
   setInterval(gameTick, TICK_INTERVAL);
   requestAnimationFrame(animate);
 
-  // 5) now load your heavy ONNX model in the background
-  loadGFlowNetModel()
-    .then(() => {
-      console.log("✅ ONNX loaded, now scoring…");
-      return fetchCandidateMoves();   // snapshot + draw + then score
-    })
-    .then(() => console.log("✅ First scoring done"))
-    .catch(err => console.warn("⚠️ ONNX load or scoring failed:", err));
+  // 5) **Wait for ONNX load before you ever call fetchCandidateMoves()**
+  try {
+    await loadGFlowNetModel();
+    console.log("✅ ONNX loaded, now scoring…");
+    await fetchCandidateMoves();   // safe: session is ready
+    console.log("✅ First scoring done");
+  } catch (err) {
+    console.warn("⚠️ ONNX load or first scoring failed:", err);
+  }
 
-  // 6) wire up reset button, pretrained-flows fetch, etc., as before
+  // 6) Reset‐button & optional pretrained flows
   resetBtn.addEventListener("click", doResetGame);
   fetch("pretrained_flows_tb.json")
     .then(res => res.json())
-    .then(data => { agent.loadFromJSON(data); })
-    .catch(()=>{/*no pretrained flows*/});
+    .then(data => agent.loadFromJSON(data))
+    .catch(()=>{/* ignore if none */});
 }
 
-
-//-----------------------------------------------------------------------------
-// LAUNCH
-//-----------------------------------------------------------------------------
 window.addEventListener("DOMContentLoaded", init);
