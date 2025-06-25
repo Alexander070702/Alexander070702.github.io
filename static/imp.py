@@ -47,7 +47,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-import torch.quantization
 from torch.utils.tensorboard import SummaryWriter
 
 # --- Constants and Configuration ---
@@ -706,8 +705,6 @@ def main():
     parser.add_argument('--seed', type=int, default=int(time.time()), help="Random seed.")
     parser.add_argument('--max-steps', type=int, default=0, help="Maximum placements per episode (focus on early game).")
     parser.add_argument('--use-fixed-seq', action='store_true', help="Train on the same piece order as the JS demo.")
-    parser.add_argument('--minimal-checkpoint', action='store_true',
-                        help='Save a smaller checkpoint by omitting optimizer state and using dynamic quantization.')
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -774,25 +771,14 @@ def main():
     # --- Save and Export ---
     print("Training finished. Saving model...")
     Path(args.checkpoint_path).parent.mkdir(exist_ok=True, parents=True)
-    if args.minimal_checkpoint:
-        print("Saving minimal checkpoint with dynamic quantization…")
-        quantized_model = torch.quantization.quantize_dynamic(
-            model, {nn.Linear}, dtype=torch.qint8
-        )
-        torch.save({'model_state_dict': quantized_model.state_dict()}, args.checkpoint_path)
-    else:
-        torch.save({
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'args': args,
-        }, args.checkpoint_path)
-    size_mb = Path(args.checkpoint_path).stat().st_size / (1024 * 1024)
-    print(f"✅ Saved checkpoint: {args.checkpoint_path} ({size_mb:.2f} MB)")
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'args': args,
+    }, args.checkpoint_path)
+    print(f"✅ Saved checkpoint: {args.checkpoint_path}")
 
     model.eval()
-    export_model = model
-    if args.minimal_checkpoint:
-        export_model = torch.quantization.quantize_dynamic(model, {nn.Linear}, dtype=torch.qint8)
     dummy_board = torch.randn(1, BOARD_HEIGHT, BOARD_WIDTH, device=device)
     dummy_cur_id = torch.tensor([0], dtype=torch.long, device=device)
     dummy_nxt_id = torch.tensor([1], dtype=torch.long, device=device)
@@ -802,7 +788,7 @@ def main():
     Path(args.onnx_path).parent.mkdir(exist_ok=True, parents=True)
     try:
         torch.onnx.export(
-            export_model.model,
+            model.model,
             (dummy_board, dummy_cur_oh, dummy_nxt_oh),
             args.onnx_path,
             export_params=True,
@@ -816,8 +802,7 @@ def main():
                 'logits': {0:'batch'},
             }
         )
-        size_mb = Path(args.onnx_path).stat().st_size / (1024 * 1024)
-        print(f"✅ Exported ONNX model: {args.onnx_path} ({size_mb:.2f} MB)")
+        print(f"✅ Exported ONNX model: {args.onnx_path}")
     except Exception as e:
         print(f"❌ Failed to export ONNX model: {e}")
 
