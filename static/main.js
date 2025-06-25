@@ -1006,21 +1006,36 @@ async function getCandidateMoves() {
   // ——————— ALWAYS RUN THE ONNX INFERENCE ———————
   const flowsForState = await computeFlowsForState(game);
 
-  // compute probabilities
-  let sumFlow = 0;
+  // compute flows & heuristic scores for each candidate
   for (let c of cands) {
     const logf = flowsForState[c.action_key] ?? -Infinity;
-    const f = Math.exp(logf);
-    c.flow  = f;
+    c.flow  = Math.exp(logf);
     c.score = logf + HEURISTIC_MIX *
       heuristicScoreLookahead(game.board, c, game.next_piece_type);
-    sumFlow += f;
-  }
-  for (let c of cands) {
-    c.probability = sumFlow > 0 ? c.flow / sumFlow : 1 / cands.length;
   }
 
-  console.log("[TB] ▶️ Flows & probs from ONNX:", cands);
+  // -----------------------------------------------------------------
+  // Deduplicate by resulting board state so rotations that land in the
+  // same place are merged. Keep the highest scoring candidate for each
+  // final board configuration.
+  // -----------------------------------------------------------------
+  const bestByBoard = {};
+  for (let c of cands) {
+    const after = applyPieceToBoard(game.board, c.piece);
+    const key = JSON.stringify(after.board);
+    if (!bestByBoard[key] || c.score > bestByBoard[key].score) {
+      bestByBoard[key] = { ...c };
+    }
+  }
+  const uniqueCands = Object.values(bestByBoard);
+
+  // compute probabilities based on the remaining candidates
+  let sumFlow = uniqueCands.reduce((s, cand) => s + cand.flow, 0);
+  for (let c of uniqueCands) {
+    c.probability = sumFlow > 0 ? c.flow / sumFlow : 1 / uniqueCands.length;
+  }
+
+  console.log("[TB] ▶️ Flows & probs from ONNX:", uniqueCands);
 
   return {
     game_state: {
@@ -1031,7 +1046,7 @@ async function getCandidateMoves() {
       piece_id: game.piece_id
     },
     current_piece_center: game.get_piece_center(),
-    terminal_moves: cands
+    terminal_moves: uniqueCands
   };
 }
 
