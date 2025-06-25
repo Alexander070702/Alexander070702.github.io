@@ -165,20 +165,45 @@ class TetrisEnv:
         piece_type = self.current_piece['type']
         base_shape = TETROMINOES[piece_type]
 
+        seen_states = set()
+
         for rot in range(N_ROTATIONS[piece_type]):
-            shape = np.rot90(base_shape, k=-rot) # Using negative k for clockwise rotation convention
+            shape = np.rot90(base_shape, k=-rot)  # Using negative k for clockwise rotation convention
             max_x = BOARD_WIDTH - shape.shape[1]
             for x in range(max_x + 1):
                 # Find drop position by simulating a hard drop
                 y = 0
                 # First, check if the piece can even be in this column at the top
-                if not self._collides(shape, (x, y)):
-                    while not self._collides(shape, (x, y + 1)):
-                        y += 1
-                    moves.append((rot, x))
-        
-        # Using set removes duplicate final board states that might result from different moves
-        return list(set(moves))
+                if self._collides(shape, (x, y)):
+                    continue
+                while not self._collides(shape, (x, y + 1)):
+                    y += 1
+
+                # Simulate placing the piece to check for duplicate terminal states
+                sim_board = self.board.copy()
+                for r in range(shape.shape[0]):
+                    for c in range(shape.shape[1]):
+                        if shape[r, c]:
+                            sim_board[y + r, x + c] = True
+
+                # Simulate line clears to match the actual environment step
+                full_rows = np.all(sim_board, axis=1)
+                if np.any(full_rows):
+                    cleared = np.zeros_like(sim_board)
+                    new_idx = BOARD_HEIGHT - 1
+                    for r_idx in range(BOARD_HEIGHT - 1, -1, -1):
+                        if not full_rows[r_idx]:
+                            cleared[new_idx] = sim_board[r_idx]
+                            new_idx -= 1
+                    sim_board = cleared
+
+                board_hash = sim_board.tobytes()
+                if board_hash in seen_states:
+                    continue
+                seen_states.add(board_hash)
+                moves.append((rot, x))
+
+        return moves
 
     def step(self, action: Tuple[int, int]) -> Tuple[Dict, float, bool]:
         """
