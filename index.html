@@ -1145,6 +1145,9 @@ SECTION 4: GFlowNet Core Concepts & Flow Conservation with Molecule Visualizatio
     <span id="w-rotb-val">0.50</span>
   </label>
 </div>
+<div class="controls">
+  <button id="max-weight-btn">Maximize Weight</button>
+</div>
 
      <!-- container for the chart -->
   <svg id="chart"></svg>
@@ -1397,5 +1400,17 @@ SECTION 4: GFlowNet Core Concepts & Flow Conservation with Molecule Visualizatio
       };
       slider.addEventListener('input', update);
       update();
+    });
+  </script>
+  <script>
+    document.getElementById('max-weight-btn').addEventListener('click', () => {
+      const sliders = [
+        'mw', 'logP', 'hbd', 'hba', 'tpsa', 'rotb'
+      ];
+      sliders.forEach(name => {
+        const el = document.getElementById('w-' + name);
+        el.value = name === 'mw' ? el.max : 0;
+        el.dispatchEvent(new Event('input'));
+      });
     });
   </script>
