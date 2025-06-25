@@ -111,7 +111,7 @@
         .attr('text-anchor', 'middle')
         .attr('fill', '#000')
         .attr('font-size', 12)
-        .text('Flow: ' + a.flow.toFixed(1));
+        .text('Flow: ' + a.flow.toFixed(2));
 
       drawMini(svg, boardsData.results[i].board,
                xResult, y - BH_ROOT/2,
@@ -119,8 +119,8 @@
     });
 
     // Particle parameters
-    const SPAWN_INT = 400;   // ms
-    const DURATION  = 8000; // ms
+    const SPAWN_INT = 200;   // ms
+    const DURATION  = 10000; // ms
     const MAX_PARTICLES = 300;
 
     function spawnParticle() {

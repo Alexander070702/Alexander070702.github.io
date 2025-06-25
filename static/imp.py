@@ -33,7 +33,7 @@ Usage:
         --lr-decay-step 2000 --lr-decay-gamma 0.5 --alpha-start 0.2 \
         --alpha-end 0.95 --alpha-anneal-steps 50000 \
         --checkpoint-path gfn_tetris_pro.pt \
-        --onnx-path gfn_tetris_pro.onnx
+        --onnx-path gfn.onnx
 """
 import argparse
 import random
@@ -49,6 +49,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torch.quantization
 from torch.utils.tensorboard import SummaryWriter
+import torch
 
 # --- Constants and Configuration ---
 BOARD_WIDTH, BOARD_HEIGHT = 6, 20
@@ -104,6 +105,11 @@ class TetrisEnv:
             self.next_piece_in_bag = self.bag[0]
         if self._collides(self.current_piece['shape'], (self.current_piece['x'], self.current_piece['y'])):
             self.game_over = True
+            # right after you detect game over:
+            if self.game_over:
+                reward -= 1.0
+                self.score += -1.0
+
         return self.get_state()
 
     def _fill_bag(self):
@@ -233,8 +239,10 @@ class TetrisEnv:
         lines_cleared_this_step = self._clear_lines()
         self.lines_cleared += lines_cleared_this_step
         # Use standard squared rewards for bigger impact on score
-        reward = {0: 0, 1: 100, 2: 300, 3: 500, 4: 800}[lines_cleared_this_step]
+        reward_map = {0: 0, 1: 1, 2: 3, 3: 5, 4: 8}
+        reward = reward_map[lines_cleared_this_step]
         self.score += reward
+
 
         # Spawn next piece
         self.current_piece = self._spawn_piece()
@@ -260,8 +268,7 @@ class TetrisEnv:
             self.board = new_board
         return int(lines_to_clear)
 
-# --- Heuristic ---
-# --- Heuristic ---
+
 class ProHeuristic:
     """
     An enhanced heuristic with more sophisticated features for near-perfect play,
@@ -611,6 +618,7 @@ def run_episode(env, model, heuristic, alpha, device, is_imitation: bool, max_st
         valid_moves = env.get_valid_moves()
         if not valid_moves:
             game_over = True # No more moves possible
+        
             break
 
         # Get Heuristic scores for all valid moves
@@ -795,12 +803,21 @@ def main():
     parser.add_argument('--minimal-checkpoint', action='store_true',
                         help='Save a smaller checkpoint by omitting optimizer state and using dynamic quantization.')
     args = parser.parse_args()
+    
+    print(torch.backends.mps.is_available())   # should print True
+    print(torch.backends.mps.is_built())       # should print True 
 
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+ # Use Apple MPS (Metal GPU) if available, then CUDA, else CPU
+    if torch.backends.mps.is_available():
+        device = torch.device('mps')
+    elif torch.cuda.is_available():
+        device = torch.device('cuda')
+    else:
+        device = torch.device('cpu')
     print(f"Using device: {device}")
 
     writer = SummaryWriter(args.log_dir)
