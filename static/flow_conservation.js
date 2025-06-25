@@ -111,7 +111,8 @@
         .attr('text-anchor', 'middle')
         .attr('fill', '#000')
         .attr('font-size', 12)
-        .text('Flow: ' + a.flow.toFixed(1));
+        // show the precise flow value passed from main.js
+        .text('Flow: ' + a.flow);
 
       drawMini(svg, boardsData.results[i].board,
                xResult, y - BH_ROOT/2,
