@@ -734,10 +734,14 @@ def main():
     episode_scores = deque(maxlen=100)
     total_steps = 0
     batch_buffer = []
+    prev_is_imitation = True
 
     print("Starting training…")
     for ep in range(1, args.episodes + 1):
         is_imitation = ep <= args.imitation_epochs
+        if is_imitation != prev_is_imitation:
+            batch_buffer = []
+            prev_is_imitation = is_imitation
         alpha = 0.0 if is_imitation else get_current_alpha(total_steps, args)
         
         trajectory, final_score = run_episode(
