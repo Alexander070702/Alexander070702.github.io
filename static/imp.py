@@ -246,7 +246,7 @@ class ProHeuristic:
         if weights is None:
             # New weights for: [agg_height, holes, hole_depth, row_transitions, bumpiness, wells, lines_cleared^1.5]
             # These weights are more aggressive in penalizing imperfections.
-            self.weights = torch.tensor([-4.5, -7.9, -3.4, -3.2, -3.1, -3.3, 4.5], dtype=torch.float32)
+            self.weights = torch.tensor([-4.5, -7.9, -3.4, -3.2, -3.1, -3.3, 6.0], dtype=torch.float32)
         else:
             self.weights = torch.tensor(weights, dtype=torch.float32)
         self._sim_env = TetrisEnv() # A private, stateless helper
@@ -313,18 +313,22 @@ class ProHeuristic:
     def score_state(self, board: np.ndarray, lines_cleared: int) -> float:
         """Scores a single board state using the advanced features."""
         features = self.get_board_features(board)
-        
+
         # Apply a non-linear reward for line clears to heavily favor Tetrises
         lines_cleared_reward = lines_cleared ** 1.5
-        
+
         all_features = torch.from_numpy(np.append(features, lines_cleared_reward)).float()
         return torch.dot(all_features, self.weights.to(all_features.device)).item()
 
-    def score_moves(self, board: np.ndarray, current_piece_type: str, next_piece_type: str, moves: List[Tuple[int, int]]) -> torch.Tensor:
-        """
-        Scores all possible moves using a one-step lookahead.
-        The score is based on the best possible outcome after placing the *next* piece.
-        """
+    def score_moves(
+        self,
+        board: np.ndarray,
+        current_piece_type: str,
+        next_piece_type: str,
+        next_next_piece_type: str,
+        moves: List[Tuple[int, int]],
+    ) -> torch.Tensor:
+        """Scores moves using a two-step lookahead."""
         scores = []
         
         for rot, x in moves:
@@ -359,45 +363,102 @@ class ProHeuristic:
             else:
                 post_clear_board = sim_board
             
-            # --- 3. Lookahead Step ---
-            best_next_score = -float('inf')
-            
+            # --- 3. Two-step Lookahead ---
+            best_next_score = -float("inf")
+
             self._sim_env.board = post_clear_board
-            self._sim_env.current_piece = {'type': next_piece_type, 'shape': TETROMINOES[next_piece_type]} # Be more explicit
+            self._sim_env.current_piece = {
+                'type': next_piece_type,
+                'shape': TETROMINOES[next_piece_type],
+            }
             next_moves = self._sim_env.get_valid_moves()
-            
+
             if not next_moves:
-                best_next_score = -1e9 # Heavily penalize states with no follow-up moves (game over)
+                best_next_score = -1e9
             else:
                 for next_rot, next_x in next_moves:
-                    lookahead_board = post_clear_board.copy()
-                    self._sim_env.board = lookahead_board
-                    
+                    board_after_next = post_clear_board.copy()
+                    self._sim_env.board = board_after_next
+
                     next_shape = np.rot90(TETROMINOES[next_piece_type], k=-next_rot)
                     next_y = 0
-                    while not self._sim_env._collides(next_shape, (next_x, next_y + 1)): next_y += 1
-                    
+                    while not self._sim_env._collides(next_shape, (next_x, next_y + 1)):
+                        next_y += 1
+
                     for r in range(next_shape.shape[0]):
                         for c in range(next_shape.shape[1]):
-                            if next_shape[r, c]: lookahead_board[next_y + r, next_x + c] = True
-                    
-                    final_lookahead_board = lookahead_board
-                    lookahead_lines_cleared = 0
-                    full_rows_lookahead = np.all(lookahead_board, axis=1)
-                    if np.any(full_rows_lookahead):
-                         lines_cleared = int(np.sum(full_rows_lookahead))
-                         # We only need the score, not the resulting board state for the lookahead
-                         lookahead_lines_cleared = lines_cleared
-                
-                    score = self.score_state(final_lookahead_board, lookahead_lines_cleared)
-                    if score > best_next_score:
-                        best_next_score = score
+                            if next_shape[r, c]:
+                                board_after_next[next_y + r, next_x + c] = True
+
+                    full_rows_next = np.all(board_after_next, axis=1)
+                    lines_after_next = int(np.sum(full_rows_next))
+                    if lines_after_next > 0:
+                        cleared_board = np.zeros_like(board_after_next)
+                        new_idx = BOARD_HEIGHT - 1
+                        for r_idx in range(BOARD_HEIGHT - 1, -1, -1):
+                            if not full_rows_next[r_idx]:
+                                cleared_board[new_idx] = board_after_next[r_idx]
+                                new_idx -= 1
+                    else:
+                        cleared_board = board_after_next
+
+                    # Reward configurations that return to an empty board
+                    lookahead_bonus = 0.0
+                    if not np.any(cleared_board):
+                        lookahead_bonus += 50.0
+
+                    # Encourage sequences that clear additional lines after the next piece
+                    if lines_after_next > lines_cleared_this_step:
+                        lookahead_bonus += 10.0 * (lines_after_next - lines_cleared_this_step)
+
+                    # Second lookahead
+                    self._sim_env.board = cleared_board
+                    self._sim_env.current_piece = {
+                        'type': next_next_piece_type,
+                        'shape': TETROMINOES[next_next_piece_type],
+                    }
+                    next_next_moves = self._sim_env.get_valid_moves()
+
+                    best_third_score = -float("inf")
+                    if not next_next_moves:
+                        best_third_score = -1e9
+                    else:
+                        for nn_rot, nn_x in next_next_moves:
+                            board_after_nn = cleared_board.copy()
+                            self._sim_env.board = board_after_nn
+
+                            nn_shape = np.rot90(TETROMINOES[next_next_piece_type], k=-nn_rot)
+                            nn_y = 0
+                            while not self._sim_env._collides(nn_shape, (nn_x, nn_y + 1)):
+                                nn_y += 1
+
+                            for r in range(nn_shape.shape[0]):
+                                for c in range(nn_shape.shape[1]):
+                                    if nn_shape[r, c]:
+                                        board_after_nn[nn_y + r, nn_x + c] = True
+
+                            full_rows_nn = np.all(board_after_nn, axis=1)
+                            lines_after_nn = int(np.sum(full_rows_nn)) if np.any(full_rows_nn) else 0
+
+                            score2 = self.score_state(board_after_nn, lines_after_nn)
+                            if not np.any(board_after_nn):
+                                score2 += 50.0
+                            if score2 > best_third_score:
+                                best_third_score = score2
+
+                    score1 = (
+                        self.score_state(cleared_board, lines_after_next)
+                        + lookahead_bonus
+                        + 0.7 * best_third_score
+                    )
+                    if score1 > best_next_score:
+                        best_next_score = score1
             
             # 4. Final score combines immediate board quality with future potential
             # The immediate score is based on the state *after* the first piece is placed
             immediate_score = self.score_state(post_clear_board, lines_cleared_this_step)
             # Discount the future score slightly to prioritize the current move's quality
-            final_score = immediate_score + 0.75 * best_next_score
+            final_score = immediate_score + 0.6 * best_next_score
             scores.append(final_score)
 
         return torch.tensor(scores, dtype=torch.float32)
@@ -508,10 +569,12 @@ class TetrisFlowNet(nn.Module):
 
 # --- Training ---
 def get_current_alpha(step, args):
-    """Linearly anneals alpha from start to end over anneal_steps."""
+    """Cosine schedule for alpha to avoid abrupt policy shifts."""
     if step >= args.alpha_anneal_steps:
         return args.alpha_end
-    return args.alpha_start + (args.alpha_end - args.alpha_start) * (step / args.alpha_anneal_steps)
+    t = step / args.alpha_anneal_steps
+    cos_t = 0.5 - 0.5 * np.cos(np.pi * t)
+    return args.alpha_start + (args.alpha_end - args.alpha_start) * cos_t
 
 def run_episode(env, model, heuristic, alpha, device, is_imitation: bool, max_steps: int = 0):
     """
@@ -528,6 +591,7 @@ def run_episode(env, model, heuristic, alpha, device, is_imitation: bool, max_st
         current_board = state['board']
         current_piece_type = state['current_piece_type']
         next_piece_type = state['next_piece_type']
+        next_next_piece_type = env.bag[1] if len(env.bag) > 1 else env.bag[0]
         
         valid_moves = env.get_valid_moves()
         if not valid_moves:
@@ -536,7 +600,11 @@ def run_episode(env, model, heuristic, alpha, device, is_imitation: bool, max_st
 
         # Get Heuristic scores for all valid moves
         heuristic_scores = heuristic.score_moves(
-            current_board, current_piece_type, next_piece_type, valid_moves
+            current_board,
+            current_piece_type,
+            next_piece_type,
+            next_next_piece_type,
+            valid_moves,
         ).to(device)
 
         if is_imitation:
