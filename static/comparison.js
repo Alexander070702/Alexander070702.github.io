@@ -1,7 +1,6 @@
 function initComparisonChart() {
   const container = d3.select("#comparisonChart");
   const width = 300, height = 400;
-  const nodeRadius = 18; // enlarge nodes
 
   // ─── Mock data ───
   const leftData = {
@@ -53,37 +52,37 @@ function initComparisonChart() {
        .attr("fill", "#ffffff");
   });
 
-  // ─── Arrow markers ───
+  // ─── Two arrow‐markers pulled back to circle edge ───
   [svgLeft, svgRight].forEach(svg => {
     const defs = svg.append("defs");
 
-    // darker arrow used normally
-    defs.append("marker")
-      .attr("id", "arrow")
-      .attr("viewBox", "0 -5 10 10")
-      // position arrow tip exactly at the line end
-      .attr("refX", 10)
-      .attr("refY", 0)
-      .attr("markerWidth", 8)
-      .attr("markerHeight", 8)
-      .attr("orient", "auto")
-      .append("path")
-        .attr("d", "M0,-5 L10,0 L0,5 Z")
-        .attr("fill", "#000");
+    // default arrow (black), refX = 8 so it stops at the circle radius (12px)
+defs.append("marker")
+  .attr("id", "arrow")
+  .attr("viewBox", "0 0 10 10")
+  .attr("markerUnits", "userSpaceOnUse")   // ← no more scaling by stroke-width
+  .attr("refX", 27)                        // 17px circle + 10px arrow
+  .attr("refY", 5)
+  .attr("markerWidth", 10)                 // so 1 viewBox unit → 1px
+  .attr("markerHeight", 10)
+  .attr("orient", "auto")
+  .append("path")
+    .attr("d", "M0,0 L0,10 L10,5 z")
+    .attr("fill", "#000");
 
-    // lighter arrow for highlighting steps
-    defs.append("marker")
-      .attr("id", "arrow-soft")
-      .attr("viewBox", "0 -5 10 10")
-      // position arrow tip exactly at the line end
-      .attr("refX", 10)
-      .attr("refY", 0)
-      .attr("markerWidth", 8)
-      .attr("markerHeight", 8)
-      .attr("orient", "auto")
-      .append("path")
-        .attr("d", "M0,-5 L10,0 L0,5 Z")
-        .attr("fill", "#444");
+defs.append("marker")
+  .attr("id", "arrow-soft")
+  .attr("viewBox", "0 0 10 10")
+  .attr("markerUnits", "userSpaceOnUse")
+  .attr("refX", 27)
+  .attr("refY", 5)
+  .attr("markerWidth", 10)
+  .attr("markerHeight", 10)
+  .attr("orient", "auto")
+  .append("path")
+    .attr("d", "M0,0 L0,10 L10,5 z")
+    .attr("fill", "#444");
+
   });
 
   // ─── Draw DAGs ───
@@ -145,34 +144,10 @@ function initComparisonChart() {
     const edges = svg.selectAll(".edge")
       .data(data.edges).enter().append("line")
         .attr("class", "edge")
-        .attr("x1", d => {
-          const s = data.nodes.find(n => n.id === d.source);
-          const t = data.nodes.find(n => n.id === d.target);
-          const dx = t.x - s.x, dy = t.y - s.y;
-          const dist = Math.hypot(dx, dy) || 1;
-          return s.x + dx / dist * nodeRadius;
-        })
-        .attr("y1", d => {
-          const s = data.nodes.find(n => n.id === d.source);
-          const t = data.nodes.find(n => n.id === d.target);
-          const dx = t.x - s.x, dy = t.y - s.y;
-          const dist = Math.hypot(dx, dy) || 1;
-          return s.y + dy / dist * nodeRadius;
-        })
-        .attr("x2", d => {
-          const s = data.nodes.find(n => n.id === d.source);
-          const t = data.nodes.find(n => n.id === d.target);
-          const dx = t.x - s.x, dy = t.y - s.y;
-          const dist = Math.hypot(dx, dy) || 1;
-          return t.x - dx / dist * nodeRadius;
-        })
-        .attr("y2", d => {
-          const s = data.nodes.find(n => n.id === d.source);
-          const t = data.nodes.find(n => n.id === d.target);
-          const dx = t.x - s.x, dy = t.y - s.y;
-          const dist = Math.hypot(dx, dy) || 1;
-          return t.y - dy / dist * nodeRadius;
-        })
+        .attr("x1", d=>data.nodes.find(n=>n.id===d.source).x)
+        .attr("y1", d=>data.nodes.find(n=>n.id===d.source).y)
+        .attr("x2", d=>data.nodes.find(n=>n.id===d.target).x)
+        .attr("y2", d=>data.nodes.find(n=>n.id===d.target).y)
         .attr("stroke", "#000")
         .attr("stroke-width", 2)
         .attr("marker-end", "url(#arrow)");
@@ -181,7 +156,7 @@ function initComparisonChart() {
     svg.selectAll(".node")
       .data(data.nodes).enter().append("circle")
         .attr("class", "node")
-        .attr("r", nodeRadius)
+        .attr("r", 17)
         .attr("cx", d=>d.x)
         .attr("cy", d=>d.y)
         .attr("fill", "#1f77b4")
