@@ -1,6 +1,7 @@
 function initComparisonChart() {
   const container = d3.select("#comparisonChart");
   const width = 300, height = 400;
+  const nodeRadius = 18; // enlarge nodes
 
   // ─── Mock data ───
   const leftData = {
@@ -52,34 +53,34 @@ function initComparisonChart() {
        .attr("fill", "#ffffff");
   });
 
-  // ─── Two arrow‐markers pulled back to circle edge ───
+  // ─── Arrow markers ───
   [svgLeft, svgRight].forEach(svg => {
     const defs = svg.append("defs");
 
-    // default arrow (black), refX = 8 so it stops at the circle radius (12px)
+    // darker arrow used normally
     defs.append("marker")
       .attr("id", "arrow")
-      .attr("viewBox", "0 0 10 10")
-      .attr("refX", 15)
-      .attr("refY", 5)
-      .attr("markerWidth", 6)
-      .attr("markerHeight", 6)
+      .attr("viewBox", "0 -5 10 10")
+      .attr("refX", nodeRadius + 6)
+      .attr("refY", 0)
+      .attr("markerWidth", 8)
+      .attr("markerHeight", 8)
       .attr("orient", "auto")
       .append("path")
-        .attr("d", "M0,0 L0,10 L10,5 z")
+        .attr("d", "M0,-5 L10,0 L0,5 Z")
         .attr("fill", "#000");
 
-    // soft arrow (dark‐gray), even further back
+    // lighter arrow for highlighting steps
     defs.append("marker")
       .attr("id", "arrow-soft")
-      .attr("viewBox", "0 0 10 10")
-      .attr("refX", 6)
-      .attr("refY", 5)
-      .attr("markerWidth", 4)
-      .attr("markerHeight", 4)
+      .attr("viewBox", "0 -5 10 10")
+      .attr("refX", nodeRadius + 6)
+      .attr("refY", 0)
+      .attr("markerWidth", 8)
+      .attr("markerHeight", 8)
       .attr("orient", "auto")
       .append("path")
-        .attr("d", "M0,0 L0,10 L10,5 z")
+        .attr("d", "M0,-5 L10,0 L0,5 Z")
         .attr("fill", "#444");
   });
 
@@ -154,7 +155,7 @@ function initComparisonChart() {
     svg.selectAll(".node")
       .data(data.nodes).enter().append("circle")
         .attr("class", "node")
-        .attr("r", 12)
+        .attr("r", nodeRadius)
         .attr("cx", d=>d.x)
         .attr("cy", d=>d.y)
         .attr("fill", "#1f77b4")
