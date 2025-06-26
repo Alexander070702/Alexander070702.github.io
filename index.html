@@ -886,24 +886,20 @@ img {
 <main>
   <section id="introduction">
     <div class="section-content">
-      <h2>1. Introduction: Generative Flow Networks</h2>
+      <h2>1. Introduction: Generative Flow Networks (GFlowNets)</h2>
       
       <p>
-        A <strong>Generative Flow Network (GFlowNet)</strong> distributes probability
-        mass over a directed acyclic graph so that entire objects are sampled in
-        proportion to a user‑defined reward. Rather than chasing a single best
-        policy as in conventional reinforcement learning, a GFlowNet learns to
-        sample <em>many</em> high‑value outcomes.
-      </p>
+      A <strong>Generative Flow Network</strong> (GFlowNet) is a probabilistic framework for constructing complex objects by sequentially sampling trajectories in a directed acyclic graph (DAG). Each trajectory corresponds to a sequence of actions that produces a complete object (for example, a finished Tetris board or a fully formed molecule). A GFlowNet assigns non-negative flow (probability mass) to each trajectory so that the marginal probability of sampling any complete object is proportional to a user-defined reward for that object.
+    </p>
 
-      <p>
-        This proportional sampling is valuable whenever several solutions are
-        nearly as good as one another—for example in
-        <strong>drug discovery</strong> or complex games like
-        <strong>Tetris</strong>. By spreading flow across promising paths the
-        network encourages exploration and maintains robustness if the perceived
-        optimum later changes.
-      </p>
+    <p>
+      Unlike conventional reinforcement learning, which typically converges to a single best policy, GFlowNets aim to learn a distribution over many high-reward outcomes. This property of <em>proportional sampling</em> is especially valuable in applications where multiple viable solutions are required, such as diverse move sequences in games or candidate molecules in drug discovery.
+    </p>
+
+    <p>
+      The figure contrasts the behavior of a standard single-path reinforcement learner with that of a GFlowNet. In the traditional RL approach (left), the policy concentrates probability mass along one “best” trajectory. In contrast, the GFlowNet (right) spreads its flow across several promising paths. Each path in the diagram represents an alternative construction strategy. By maintaining multiple plausible routes, GFlowNets preserve exploration and remain robust if the optimal solution changes over time.
+    </p>
+
   
       <!-- Comparison Chart: single-path vs. multi-path -->
       <div id="comparisonChart" style="width:100%; height:auto; min-height:400px;"></div>
@@ -914,20 +910,9 @@ img {
         });
       </script>
   
-      <p>
-        The chart contrasts a single‑path reinforcement learner with a
-        GFlowNet that spreads its probability mass over several trajectories.
-        Each route in the figure represents a different construction strategy.
-        By maintaining more than one plausible path, the network preserves
-        alternatives when the optimal choice is uncertain.
-      </p>
-  
+
 
   </section>
-  
-  
-  
-
   <!-- 
     =================================================================================
     SECTION 1: TETRIS DEMO
@@ -937,23 +922,24 @@ img {
   -->
   <section id="tetris-demo">
     <div class="section-content">
-      <h2>2. Tetris GFlowNet Demonstration</h2>
-      <p>
-        This interactive demo showcases a neural policy trained with the
-        GFlowNet objective. For every legal placement of the falling piece, the
-        network predicts a flow value that estimates the long‑term reward of that
-        move. During play the highest‑flow option is typically chosen, although
-        occasional exploration lets you observe alternative strategies.
-      </p>
-      <p>
-        The sidebar lists the candidate moves ranked by their flows. Clicking a
-        move forces the agent to adopt it so you can see how the board evolves
-        and how the subsequent flows change.
-      </p>
-      
-      
-    </div>
-  
+     <h2>2. Tetris GFlowNet Demonstration</h2>
+
+    <p>
+      In this interactive demonstration, a neural policy trained under the GFlowNet framework is applied to the game of Tetris. At each step, the network evaluates every legal placement of the falling tetromino and predicts a <em>flow value</em> that estimates the expected future reward (e.g., line clears plus a survival bonus).
+    </p>
+
+    <p>
+      The sidebar lists all candidate moves ordered by their sampling probabilities (obtained via softmax over the predicted flows). By default, the green move is executed automatically, but you may click any other candidate to override the choice. You can also pause the game at any time to examine how flow values are redistributed across subsequent moves.
+    </p>
+
+
+<p>
+
+  Conceptually, the GFlowNet constructs a DAG of board configurations. The figure below displays only the top three moves from each state for clarity—internally, the GFlowNet still evaluates <strong>all</strong> legal moves. All branches are drawn with uniform width and each branch is labeled with its predicted flow value. 
+  This focused illustration shows how the GFlowNet maintains multiple promising trajectories, while internally still considering lower‐probability options.
+</p>
+
+
 <!-- Actual Tetris Canvas & Moves -->
 <section id="tetris-game">
   <div class="container">
@@ -1023,75 +1009,40 @@ img {
 
 </section>
 
+<details>
+  <summary>Implementation Details</summary>
+  <p>
+    Training begins with a large batch of self-play episodes in a custom Tetris environment. Each episode records the full sequence of piece placements (the “trajectory”) along with the final game score. Initially, the network imitates a strong expert heuristic to provide stable behavior. Once the imitation phase is complete, training switches to the <strong>Trajectory Balance</strong> objective.
+  </p>
+  <p>
+    The Trajectory Balance loss enforces that the total flow assigned by the network to a trajectory matches the exponentiated reward of its final state. Formally, for a trajectory 
+    \(x_0 \to x_1 \to \cdots \to x_T\) with reward \(R(x_T)\), model flows \(F(x_t \to x_{t+1})\) and per-piece normalizers \(\log Z\), the loss is
+  </p>
+  <p>
+    $$\mathcal{L}_{TB} \;=\;\bigl(\log Z \;+\;\sum_{t=0}^{T-1}\log F(x_t \to x_{t+1})\;-\;\log R(x_T)\bigr)^{2}$$
+  </p>
+  <p>
+    Intuitively, this trains the network so that the product of predicted flows along a trajectory (times the normalizer) equals the true reward. During backpropagation, both the per-action flows and the normalization constants \(\log Z\) are adjusted to satisfy this equality in expectation over sampled trajectories.
+  </p>
+  <p>
+    The core model is a deep convolutional network (a ResNet-style trunk enriched with Squeeze-and-Excite blocks) that extracts spatial features from the board. These features, plus one-hot encodings of the current and next pieces, feed into an MLP head that outputs unnormalized log-flow scores for every rotation and horizontal position. Gradients are clipped to prevent instability and the learning rate decays in steps as training progresses. The key metrics like average score, loss curves, learning rate and the normalization constants (“log Z”) for each piece type are logged to TensorBoard throughout.
+  </p>
+  <p>
+    After training concludes, the final network weights and learned normalizers are exported for client-side inference. In the browser, these parameters power an ONNX runtime that computes move flows in real time without any server calls.
+  </p>
+</details>
 
-    <details>
-      <summary>Implementation Details</summary>
-      <p>
-        The Tetris demonstration employs a pretrained neural GFlowNet policy. Within the <code>TetrisGame</code> environment, the agent receives partial line-clearing rewards (e.g., +300 for one line up to +3000 for four lines) supplemented by a fixed survival bonus. To promote structurally coherent play, the agent is penalized in proportion to the count of board holes, the maximum column height and board bumpiness following each piece placement.
-      </p>
-      <p>
-        During training, each state–action pair is encoded into a 212-dimensional feature vector and passed through a multilayer perceptron with 512-unit hidden layers to predict unnormalized log-flow values. Trajectories are stored in a replay buffer and model parameters as well as the log-partition function <code>logZ</code> are jointly optimized using the trajectory-balance loss.
-      </p>
-      <p>
-        Upon completion of training, the resulting model weights and <code>logZ</code> are serialized into JSON for use in the front-end. The JavaScript client loads this data to instantiate a <code>NeuralFlowNet</code>, which computes log-flow values for all terminal moves, applies a softmax to yield sampling probabilities and renders the top candidate moves within the Tetris interface.
-      </p>
-    </details>
-    <details>
-      <summary>Heuristic and State-Space Reduction</summary>
-      <p>
-        To mitigate the combinatorial explosion of terminal moves, the front end applies a <em>beam-blend heuristic</em>. For each candidate terminal move, two independent metrics are computed:
-      </p>
-      <ol>
-          <strong>Flow score</strong>: The normalized log-flow output from the GFlowNet, reflecting the learned policy’s preference for the move.
-
-
-          <strong>One-step lookahead score</strong>: A depth-2 beam search estimate obtained by simulating the candidate move, sampling a single subsequent piece and selecting the highest-scoring terminal placement according to the same evaluation criteria. This provides an approximate measure of immediate downstream potential.
-
-      </ol>
-      <p>
-        Both metrics are min–max normalized to the [0,1] interval and combined via a linear mixture: <code>score = α·flow + (1−α)·beam</code>, with α empirically set to 0.7. This hybridization preserves diversity from the GFlowNet while injecting a targeted lookahead bias, effectively reducing the search space.
-      </p>
-      <p>
-        Finally, moves are categorized by line clears, net hole reduction and clean-flat outcomes. A shortlist of the top three moves is selected from the highest-scoring category and presented to the user, balancing exploration through GFlowNet sampling and exploitation via heuristic prioritization.
-      </p>
-    </details>    
-      
-
-  </section>
-  
+<details>
+  <summary>Heuristic and State-Space Reduction</summary>
+  <p>
+    Although the GFlowNet can in principle score every legal placement, the number of terminal moves can grow very large. To keep the demo responsive, a parallel heuristic computes board features such as aggregate column heights, hole counts and depths, row transitions, bumpiness and a non-linear bonus for line clears and performs a one- or two-step lookahead.
+  </p>
+  <p>
+    At inference, the raw log-flows from the GFlowNet and the lookahead heuristic scores are each scaled to [0,1] and blended (e.g., 50/50 mix). This hybrid score ranks all candidate placements. To avoid redundant options, placements leading to identical resulting boards are merged, keeping only the highest-scoring version. Finally, the top three unique moves are shown in the sidebar and highlighted in the DAG. This approach preserves the GFlowNet’s diversity while focusing on the most promising moves for fast, interactive play.
+  </p>
+</details>
 
 
-  <section id="motivation">
-    <div class="section-content">
-      <h2>3. Understanding GFlowNets</h2>
-      
-      <p>
-        A GFlowNet constructs an object one step at a time in a DAG. Each partial
-        state is extended by actions until a terminal object is produced and
-        evaluated by a reward function.
-      </p>
-
-      <p>
-        Imagine water flowing through a branching set of pipes. The amount of
-        water reaching each endpoint should match the reward of the object at
-        that node. Because the flow at every junction must be conserved,
-        even less promising paths retain some probability and are not pruned too
-        early.
-      </p>
-
-      <p>
-        The following visualization shows how probability is divided among
-        several paths. High‑reward solutions gather most of the flow, but
-        alternative routes remain accessible, which is essential when multiple
-        outcomes are worthwhile.
-      </p>
- 
-  
-
-  </section>
-  
-  
-  
 
   
 
@@ -1101,20 +1052,18 @@ SECTION 4: GFlowNet Core Concepts & Flow Conservation with Molecule Visualizatio
 <section id="theory">
   <div class="section-content">
     <h2>4. Core Concepts & Flow Conservation</h2>
-    
-      <p>
-        In molecular design each action can be viewed as adding a fragment to an
-        evolving structure. A GFlowNet samples these actions along a DAG until a
-        complete molecule is built and scored by a reward function such as
-        binding affinity or synthesizability.
-      </p>
+    <p>
+      The principles demonstrated in the Tetris demo extend naturally to molecular generation. In this context, each node represents a partial molecule and each edge an added fragment.
+    </p>
 
-      <p>
-        Thanks to <strong>flow conservation</strong>, the incoming probability at
-        every intermediate structure is redistributed to its children. Higher
-        rewards draw more flow, leading to more frequent sampling of promising
-        molecules while still exploring alternative branches of the space.
-      </p>
+    <p>
+      In molecular design, a GFlowNet sequentially adds fragments to an evolving structure until a complete molecule is produced and scored by a reward function. Thanks to <strong>flow conservation</strong>, the total incoming probability at each intermediate molecule is redistributed among its possible extensions. Higher-reward molecules therefore attract more flow, while alternative structures retain non-zero probability and remain available for sampling.
+    </p>
+
+    <p>
+      The interactive visualization below lets you adjust the reward function using a slider. As you move the slider, the percentage of generated molecules shifts in real time. Clicking the “Maximize weight” button sets the reward to favor heavy molecules. Under this setting, the heaviest molecule appears about 49% of the time, whereas lighter molecules receive minimal flow.
+    </p>
+
 <div id="weights">
   <label>
     Weight:
@@ -1160,75 +1109,33 @@ SECTION 4: GFlowNet Core Concepts & Flow Conservation with Molecule Visualizatio
     initMoleculeFlow('#chart');
   </script>
 
-
-      <br>
-      <p>
-        The Sankey diagram below begins with a single root state and shows how
-        probability divides among several backbone structures. Link widths are
-        proportional to the share of total probability mass flowing through that
-        transition.
-      </p>
-      <p>
-        Each backbone further splits into specific molecules. The numeric labels
-        denote the expected sampling frequency for each candidate. Adjusting the
-        weights above changes these flows in real time.
-      </p>
-      <p>
-        This visualization reveals which scaffolds the network prefers while
-        still highlighting less probable alternatives that might deserve further
-        study.
-      </p>
+<details>
+  <summary>Technical Insight: Flow = Reward at Terminal Nodes</summary>
+  <p>
+    In a GFlowNet, every path through the DAG from the root to a terminal node carries a flow value. At convergence, the total flow arriving at a terminal node \(x_T\) exactly equals the reward \(R(x_T)\) assigned to that complete molecule. Formally, if all flow contributions along each trajectory multiply (or sum in log-space) to the reward, then sampling from the GFlowNet produces molecules with frequencies proportional to their desirability.
+  </p>
+  <p>
+    During training, the network adjusts its per-action flows and normalization constants so that:
+  </p>
+  <p style="text-align:center;">
+    $$\sum_{\text{paths}\,\to\,x_T} F(\text{path}) \;=\; R(x_T)$$
+  </p>
+  <p>
+    This property guarantees that the fraction of samples corresponding to any molecule matches its share of the total reward mass, ensuring faithful proportional sampling of high-quality candidates.
+  </p>
+</details>
 
 
+<details>
+  <summary>Pretraining GFlowNets for Fast Inference</summary>
+  <p>
+    GFlowNets can be pretrained by investing compute time upfront to fit flows across many example trajectories.  Once training completes, the model can generate diverse high-reward molecules almost instantly, without further search.
+  </p>
+  <p>
+    In practice, a pretrained GFlowNet produces large batches of candidate molecules with a single forward pass, dramatically accelerating the exploration phase in drug discovery.  This contrasts with traditional search or optimization methods, which often require expensive iterative evaluations for each new molecule.
+  </p>
+</details>
 
-    
-    
-
-    <details>
-      <summary>Why This Matters in Drug Discovery</summary>
-      <p>
-        Drug discovery involves exploring many possible molecular structures 
-        in hopes of finding effective treatments. Because GFlowNets distribute 
-        “flow” across a set of strong candidates, they can systematically 
-        uncover molecules with good properties without missing other viable options. 
-        If a top molecule fails in real testing, the method still has other strong 
-        candidates to propose.      </p>
-      <p>
-        This ability to handle uncertainty in scoring (for example, uncertain predictions 
-        of how well a molecule binds) makes GFlowNets a powerful tool. Instead of discarding 
-        lower-scoring molecules outright, some flow will still reach them, keeping 
-        potential alternatives in play. Moreover, scientists also obtain samples with lower rewards, which can further enhance their understanding of the molecule generation process using GFlowNets. 
-
-      </p>
-    </details>
-
-    <details>
-      <summary>Technical Insight: Flow = Reward at Terminal Nodes</summary>
-      <p>
-        When the DAG reaches a terminal node that represents a complete molecule, 
-        the amount of flow arriving there matches the reward for that molecule. 
-        This ensures that the fraction of flow allocated to each final structure 
-        aligns with how promising that molecule is, based on the reward function. 
-        Training a GFlowNet involves adjusting these flows so that the final 
-        distribution over molecules reflects their rewards.
-      </p>
-    </details>
-
-    <details>
-      <summary>BONUS: Pretraining GFlowNets for Fast Inference</summary>
-      <p>
-        One of the key benefits of GFlowNets is that they can be pretrained. 
-        You spend the computation time upfront and once the network has learned, 
-        it can produce diverse, high-quality candidates almost instantly. This 
-        speeds up tasks like generating large batches of promising molecules 
-        during the exploration phase of drug development.
-      </p>
-      <p>
-        Compared to traditional methods that require extensive searching for each new design, 
-        a pretrained GFlowNet quickly provides a broad set of potentially strong solutions 
-        without repeated heavy computations.
-      </p>
-    </details>
 </section>
     <div class="references">
       <h3>References</h3>
