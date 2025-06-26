@@ -61,7 +61,8 @@ function initComparisonChart() {
     defs.append("marker")
       .attr("id", "arrow")
       .attr("viewBox", "0 -5 10 10")
-      .attr("refX", nodeRadius + 6)
+      // position arrow tip exactly at the line end
+      .attr("refX", 10)
       .attr("refY", 0)
       .attr("markerWidth", 8)
       .attr("markerHeight", 8)
@@ -74,7 +75,8 @@ function initComparisonChart() {
     defs.append("marker")
       .attr("id", "arrow-soft")
       .attr("viewBox", "0 -5 10 10")
-      .attr("refX", nodeRadius + 6)
+      // position arrow tip exactly at the line end
+      .attr("refX", 10)
       .attr("refY", 0)
       .attr("markerWidth", 8)
       .attr("markerHeight", 8)
@@ -143,10 +145,34 @@ function initComparisonChart() {
     const edges = svg.selectAll(".edge")
       .data(data.edges).enter().append("line")
         .attr("class", "edge")
-        .attr("x1", d=>data.nodes.find(n=>n.id===d.source).x)
-        .attr("y1", d=>data.nodes.find(n=>n.id===d.source).y)
-        .attr("x2", d=>data.nodes.find(n=>n.id===d.target).x)
-        .attr("y2", d=>data.nodes.find(n=>n.id===d.target).y)
+        .attr("x1", d => {
+          const s = data.nodes.find(n => n.id === d.source);
+          const t = data.nodes.find(n => n.id === d.target);
+          const dx = t.x - s.x, dy = t.y - s.y;
+          const dist = Math.hypot(dx, dy) || 1;
+          return s.x + dx / dist * nodeRadius;
+        })
+        .attr("y1", d => {
+          const s = data.nodes.find(n => n.id === d.source);
+          const t = data.nodes.find(n => n.id === d.target);
+          const dx = t.x - s.x, dy = t.y - s.y;
+          const dist = Math.hypot(dx, dy) || 1;
+          return s.y + dy / dist * nodeRadius;
+        })
+        .attr("x2", d => {
+          const s = data.nodes.find(n => n.id === d.source);
+          const t = data.nodes.find(n => n.id === d.target);
+          const dx = t.x - s.x, dy = t.y - s.y;
+          const dist = Math.hypot(dx, dy) || 1;
+          return t.x - dx / dist * nodeRadius;
+        })
+        .attr("y2", d => {
+          const s = data.nodes.find(n => n.id === d.source);
+          const t = data.nodes.find(n => n.id === d.target);
+          const dx = t.x - s.x, dy = t.y - s.y;
+          const dist = Math.hypot(dx, dy) || 1;
+          return t.y - dy / dist * nodeRadius;
+        })
         .attr("stroke", "#000")
         .attr("stroke-width", 2)
         .attr("marker-end", "url(#arrow)");
