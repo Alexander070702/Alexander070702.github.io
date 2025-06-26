@@ -151,14 +151,14 @@ function drawSankey(selector, rawScores) {
   svg.append('defs').append('marker')
     .attr('id','arrow')
     .attr('viewBox', `0 0 ${CFG2.arrowSize} ${CFG2.arrowSize}`)
-    .attr('markerUnits','strokeWidth')
+    .attr('markerUnits','userSpaceOnUse')
     .attr('markerWidth',CFG2.arrowSize)
     .attr('markerHeight',CFG2.arrowSize)
-    .attr('refX',CFG2.arrowSize)
-    .attr('refY',CFG2.arrowSize/2)
+    .attr('refX', 0)
+    .attr('refY', CFG2.arrowSize / 2)
     .attr('orient','auto')
     .append('path')
-      .attr('d',`M0,0 L0,${CFG2.arrowSize} L${CFG2.arrowSize},${CFG2.arrowSize/2} Z`)
+      .attr('d', `M0,${CFG2.arrowSize/2} L${CFG2.arrowSize},0 L${CFG2.arrowSize},${CFG2.arrowSize} Z`)
       .attr('fill','#000');
 
   // draw links
