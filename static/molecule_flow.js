@@ -147,30 +147,47 @@ function drawSankey(selector, rawScores) {
   // particle layer
   const particleLayer = svg.append('g').attr('class','particles');
 
-  // arrow marker
-  svg.append('defs').append('marker')
-    .attr('id','arrow')
-    .attr('viewBox', `0 0 ${CFG2.arrowSize} ${CFG2.arrowSize}`)
-    .attr('markerUnits','userSpaceOnUse')
-    .attr('markerWidth', CFG2.arrowSize)
-    .attr('markerHeight', CFG2.arrowSize)
-    .attr('refX', CFG2.arrowSize)
-    .attr('refY', CFG2.arrowSize / 2)
-    .attr('orient','auto')
-    .append('path')
-      .attr('d', `M0,0 L0,${CFG2.arrowSize} L${CFG2.arrowSize},${CFG2.arrowSize/2} Z`)
-      .attr('fill', '#000');
+  // draw links with manual arrowheads for full browser support
+  const linkGroup = svg.append('g').attr('class','links');
+  const linkG = linkGroup.selectAll('g')
+    .data(graph.links)
+    .enter().append('g');
 
-  // draw links
-  svg.append('g').selectAll('path')
-    .data(graph.links).enter().append('path')
-      .attr('class','link')
-      .attr('d', d => {
-        const y0 = d.source.y0 + (d.source.y1 - d.source.y0)/2;
-        const y1 = d.target.y0 + (d.target.y1 - d.target.y0)/2;
-        return `M${d.source.x1},${y0} L${d.target.x0},${y1}`;
-      })
-      .attr('marker-end','url(#arrow)');
+  linkG.each(function(d) {
+    const y0 = d.source.y0 + (d.source.y1 - d.source.y0) / 2;
+    const y1 = d.target.y0 + (d.target.y1 - d.target.y0) / 2;
+    d._coords = { x1: d.source.x1, y1: y0, x2: d.target.x0, y2: y1 };
+  });
+
+  // straight line
+  linkG.append('line')
+    .attr('x1', d => d._coords.x1)
+    .attr('y1', d => d._coords.y1)
+    .attr('x2', d => d._coords.x2)
+    .attr('y2', d => d._coords.y2)
+    .attr('stroke', '#000')
+    .attr('stroke-width', 1)
+    .attr('stroke-linecap', 'round')
+    .style('marker-end', 'none');
+
+  // arrow head as polygon
+  linkG.append('polygon')
+    .attr('points', d => {
+      const { x1, y1, x2, y2 } = d._coords;
+      const dx = x2 - x1, dy = y2 - y1;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len, uy = dy / len;
+      const perpX = -uy, perpY = ux;
+      const lenA = CFG2.arrowSize * 2;
+      const offX = ux * lenA, offY = uy * lenA;
+      const baseX = x2 - offX, baseY = y2 - offY;
+      const w = CFG2.arrowSize;
+      const p1 = [x2, y2];
+      const p2 = [baseX + perpX * w, baseY + perpY * w];
+      const p3 = [baseX - perpX * w, baseY - perpY * w];
+      return `${p1} ${p2} ${p3}`;
+    })
+    .attr('fill', '#000');
 
   // draw nodes
   const node = svg.append('g').selectAll('g')
